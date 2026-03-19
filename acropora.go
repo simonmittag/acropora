@@ -28,7 +28,11 @@ type Predicate struct {
 
 // Triple is a triple made from Entity and Predicate.
 type Triple struct {
-	Subject   Entity
-	Predicate Predicate
-	Object    Entity
+	ID                string
+	OntologyVersionID string
+	SubjectEntityID   string
+	PredicateID       string
+	ObjectEntityID    string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }

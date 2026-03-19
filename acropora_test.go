@@ -41,6 +41,7 @@ func TestNew(t *testing.T) {
 		"ontology_versions",
 		"entities",
 		"predicates",
+		"triples",
 	}
 
 	for _, table := range tables {
@@ -205,5 +206,105 @@ func TestPredicatePersistence(t *testing.T) {
 	}
 	if persistedNull.ValidTo != nil {
 		t.Errorf("expected nil valid_to, got %v", persistedNull.ValidTo)
+	}
+}
+
+func TestTriplePersistence(t *testing.T) {
+	db, err := sql.Open("pgx", testDSN)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	a, err := New(ctx, db)
+	if err != nil {
+		t.Fatalf("failed to initialize acropora: %v", err)
+	}
+
+	tx, err := a.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	// Fixtures
+	ovID := uuid.New().String()
+	_, err = tx.ExecContext(ctx, "INSERT INTO ontology_versions (id, version_hash) VALUES ($1, $2)", ovID, "triple-test-hash")
+	if err != nil {
+		t.Fatalf("failed to insert ontology version: %v", err)
+	}
+
+	subjectID := uuid.New().String()
+	_, err = tx.ExecContext(ctx, "INSERT INTO entities (id, ontology_version_id, name) VALUES ($1, $2, $3)", subjectID, ovID, "subject")
+	if err != nil {
+		t.Fatalf("failed to insert subject entity: %v", err)
+	}
+
+	objectID := uuid.New().String()
+	_, err = tx.ExecContext(ctx, "INSERT INTO entities (id, ontology_version_id, name) VALUES ($1, $2, $3)", objectID, ovID, "object")
+	if err != nil {
+		t.Fatalf("failed to insert object entity: %v", err)
+	}
+
+	predicateID := uuid.New().String()
+	_, err = tx.ExecContext(ctx, "INSERT INTO predicates (id, ontology_version_id, name) VALUES ($1, $2, $3)", predicateID, ovID, "predicate")
+	if err != nil {
+		t.Fatalf("failed to insert predicate: %v", err)
+	}
+
+	triple := Triple{
+		ID:                uuid.New().String(),
+		OntologyVersionID: ovID,
+		SubjectEntityID:   subjectID,
+		PredicateID:       predicateID,
+		ObjectEntityID:    objectID,
+	}
+
+	// 1. Insert and read back
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO triples (id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id) VALUES ($1, $2, $3, $4, $5)",
+		triple.ID, triple.OntologyVersionID, triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID)
+	if err != nil {
+		t.Fatalf("failed to insert triple: %v", err)
+	}
+
+	var persisted Triple
+	err = tx.QueryRowContext(ctx,
+		"SELECT id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id FROM triples WHERE id = $1",
+		triple.ID).Scan(&persisted.ID, &persisted.OntologyVersionID, &persisted.SubjectEntityID, &persisted.PredicateID, &persisted.ObjectEntityID)
+	if err != nil {
+		t.Fatalf("failed to query triple: %v", err)
+	}
+
+	if persisted.ID != triple.ID {
+		t.Errorf("expected ID %s, got %s", triple.ID, persisted.ID)
+	}
+
+	// 2. Query outgoing triples for a subject
+	var count int
+	err = tx.QueryRowContext(ctx, "SELECT count(*) FROM triples WHERE subject_entity_id = $1", subjectID).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query outgoing triples: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 outgoing triple, got %d", count)
+	}
+
+	// 3. Query incoming triples for an object
+	err = tx.QueryRowContext(ctx, "SELECT count(*) FROM triples WHERE object_entity_id = $1", objectID).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query incoming triples: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 incoming triple, got %d", count)
+	}
+
+	// 4. Duplicate exact triple insert fails
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO triples (id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id) VALUES ($1, $2, $3, $4, $5)",
+		uuid.New().String(), triple.OntologyVersionID, triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID)
+	if err == nil {
+		t.Error("expected error when inserting duplicate triple, got nil")
 	}
 }
