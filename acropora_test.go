@@ -3,9 +3,12 @@ package acropora
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -36,9 +39,8 @@ func TestNew(t *testing.T) {
 
 	tables := []string{
 		"ontology_versions",
-		"ontology_entities",
-		"ontology_predicates",
-		"ontology_triples",
+		"entities",
+		"predicates",
 	}
 
 	for _, table := range tables {
@@ -54,5 +56,154 @@ func TestNew(t *testing.T) {
 		if !exists {
 			t.Errorf("table %s does not exist", table)
 		}
+	}
+}
+
+func TestEntityPersistence(t *testing.T) {
+	db, err := sql.Open("pgx", testDSN)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	a, err := New(ctx, db)
+	if err != nil {
+		t.Fatalf("failed to initialize acropora: %v", err)
+	}
+
+	tx, err := a.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	ovID := uuid.New().String()
+	_, err = tx.ExecContext(ctx, "INSERT INTO ontology_versions (id, version_hash) VALUES ($1, $2)", ovID, "test-hash")
+	if err != nil {
+		t.Fatalf("failed to insert ontology version: %v", err)
+	}
+
+	entity := Entity{
+		ID:                uuid.New().String(),
+		OntologyVersionID: ovID,
+		Name:              "test-entity",
+		Metadata:          json.RawMessage(`{"key": "value"}`),
+	}
+
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO entities (id, ontology_version_id, name, metadata) VALUES ($1, $2, $3, $4)",
+		entity.ID, entity.OntologyVersionID, entity.Name, entity.Metadata)
+	if err != nil {
+		t.Fatalf("failed to insert entity: %v", err)
+	}
+
+	var persisted Entity
+	err = tx.QueryRowContext(ctx,
+		"SELECT id, ontology_version_id, name, metadata FROM entities WHERE id = $1",
+		entity.ID).Scan(&persisted.ID, &persisted.OntologyVersionID, &persisted.Name, &persisted.Metadata)
+	if err != nil {
+		t.Fatalf("failed to query entity: %v", err)
+	}
+
+	if persisted.ID != entity.ID {
+		t.Errorf("expected ID %s, got %s", entity.ID, persisted.ID)
+	}
+	if persisted.OntologyVersionID != entity.OntologyVersionID {
+		t.Errorf("expected ontology version ID %s, got %s", entity.OntologyVersionID, persisted.OntologyVersionID)
+	}
+	if persisted.Name != entity.Name {
+		t.Errorf("expected name %s, got %s", entity.Name, persisted.Name)
+	}
+	if string(persisted.Metadata) != string(entity.Metadata) {
+		t.Errorf("expected metadata %s, got %s", string(entity.Metadata), string(persisted.Metadata))
+	}
+}
+
+func TestPredicatePersistence(t *testing.T) {
+	db, err := sql.Open("pgx", testDSN)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	a, err := New(ctx, db)
+	if err != nil {
+		t.Fatalf("failed to initialize acropora: %v", err)
+	}
+
+	tx, err := a.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	ovID := uuid.New().String()
+	_, err = tx.ExecContext(ctx, "INSERT INTO ontology_versions (id, version_hash) VALUES ($1, $2)", ovID, "test-hash-2")
+	if err != nil {
+		t.Fatalf("failed to insert ontology version: %v", err)
+	}
+
+	now := time.Now().Truncate(time.Microsecond) // Postgres precision
+	from := now.Add(-time.Hour)
+	to := now.Add(time.Hour)
+
+	predicate := Predicate{
+		ID:                uuid.New().String(),
+		OntologyVersionID: ovID,
+		Name:              "test-predicate",
+		ValidFrom:         &from,
+		ValidTo:           &to,
+	}
+
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO predicates (id, ontology_version_id, name, valid_from, valid_to) VALUES ($1, $2, $3, $4, $5)",
+		predicate.ID, predicate.OntologyVersionID, predicate.Name, predicate.ValidFrom, predicate.ValidTo)
+	if err != nil {
+		t.Fatalf("failed to insert predicate: %v", err)
+	}
+
+	var persisted Predicate
+	err = tx.QueryRowContext(ctx,
+		"SELECT id, ontology_version_id, name, valid_from, valid_to FROM predicates WHERE id = $1",
+		predicate.ID).Scan(&persisted.ID, &persisted.OntologyVersionID, &persisted.Name, &persisted.ValidFrom, &persisted.ValidTo)
+	if err != nil {
+		t.Fatalf("failed to query predicate: %v", err)
+	}
+
+	if persisted.ID != predicate.ID {
+		t.Errorf("expected ID %s, got %s", predicate.ID, persisted.ID)
+	}
+	if !persisted.ValidFrom.Equal(*predicate.ValidFrom) {
+		t.Errorf("expected valid_from %v, got %v", predicate.ValidFrom, persisted.ValidFrom)
+	}
+
+	// Null handling test
+	nullPredicate := Predicate{
+		ID:                uuid.New().String(),
+		OntologyVersionID: ovID,
+		Name:              "null-predicate",
+	}
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO predicates (id, ontology_version_id, name, valid_from, valid_to) VALUES ($1, $2, $3, $4, $5)",
+		nullPredicate.ID, nullPredicate.OntologyVersionID, nullPredicate.Name, nullPredicate.ValidFrom, nullPredicate.ValidTo)
+	if err != nil {
+		t.Fatalf("failed to insert null predicate: %v", err)
+	}
+
+	var persistedNull Predicate
+	err = tx.QueryRowContext(ctx,
+		"SELECT id, ontology_version_id, name, valid_from, valid_to FROM predicates WHERE id = $1",
+		nullPredicate.ID).Scan(&persistedNull.ID, &persistedNull.OntologyVersionID, &persistedNull.Name, &persistedNull.ValidFrom, &persistedNull.ValidTo)
+	if err != nil {
+		t.Fatalf("failed to query null predicate: %v", err)
+	}
+
+	if persistedNull.ValidFrom != nil {
+		t.Errorf("expected nil valid_from, got %v", persistedNull.ValidFrom)
+	}
+	if persistedNull.ValidTo != nil {
+		t.Errorf("expected nil valid_to, got %v", persistedNull.ValidTo)
 	}
 }
