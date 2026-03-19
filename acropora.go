@@ -5,34 +5,67 @@ import (
 	"time"
 )
 
-// Entity
-type Entity struct {
+// OntologyVersion
+type OntologyVersion struct {
+	ID        string
+	Hash      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// OntologyEntity
+type OntologyEntity struct {
 	ID                string
 	OntologyVersionID string
-	Name              string
-	Metadata          json.RawMessage
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	Entity
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// OntologyPredicate
+type OntologyPredicate struct {
+	ID                string
+	OntologyVersionID string
+	Predicate
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// OntologyTriple
+type OntologyTriple struct {
+	ID                string
+	OntologyVersionID string
+	Triple
+	SubjectEntityID string
+	PredicateID     string
+	ObjectEntityID  string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// Entity
+type Entity struct {
+	Name     string
+	Metadata json.RawMessage
 }
 
 // Predicate
 type Predicate struct {
-	ID                string
-	OntologyVersionID string
-	Name              string
-	ValidFrom         *time.Time
-	ValidTo           *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	Name      string
+	ValidFrom *time.Time
+	ValidTo   *time.Time
 }
 
-// Triple is a triple made from Entity and Predicate.
+// Triple
 type Triple struct {
-	ID                string
-	OntologyVersionID string
-	SubjectEntityID   string
-	PredicateID       string
-	ObjectEntityID    string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	Subject   *Entity
+	Predicate *Predicate
+	Object    *Entity
+}
+
+// Definition
+type Definition struct {
+	Entities   []Entity
+	Predicates []Predicate
+	Triples    []Triple
 }
