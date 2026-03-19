@@ -5,28 +5,61 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-const defaultDSN = "postgres://postgres:password@localhost:5432/acropora?sslmode=disable"
+func setupTestDB(t *testing.T) (*sql.DB, func()) {
+	t.Helper()
+	ctx := context.Background()
 
-var testDSN string
-
-func TestMain(m *testing.M) {
-	testDSN = os.Getenv("DATABASE_URL")
-	if testDSN == "" {
-		testDSN = defaultDSN
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn != "" {
+		db, err := sql.Open("pgx", dsn)
+		if err != nil {
+			t.Fatalf("failed to open database: %v", err)
+		}
+		return db, func() { db.Close() }
 	}
-	os.Exit(m.Run())
-}
 
-func TestNew(t *testing.T) {
-	db, err := sql.Open("pgx", testDSN)
+	// Spin up a Docker container
+	container, err := postgres.Run(ctx,
+		"postgres:15-alpine",
+		postgres.WithDatabase("acropora"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("password"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(30*time.Second)),
+	)
+	if err != nil {
+		t.Fatalf("failed to start postgres container: %v", err)
+	}
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("failed to get connection string: %v", err)
+	}
+
+	db, err := sql.Open("pgx", connStr)
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer db.Close()
+
+	return db, func() {
+		db.Close()
+		_ = container.Terminate(ctx)
+	}
+}
+
+func TestNew(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	a, err := New(ctx, db)
@@ -58,11 +91,8 @@ func TestNew(t *testing.T) {
 }
 
 func TestSeedOntology(t *testing.T) {
-	db, err := sql.Open("pgx", testDSN)
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
-	defer db.Close()
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	a, err := New(ctx, db)
@@ -70,7 +100,7 @@ func TestSeedOntology(t *testing.T) {
 		t.Fatalf("failed to initialize acropora: %v", err)
 	}
 
-	// Ensure a clean slate for deterministic test runs
+	// Ensure a clean slate for deterministic test runs (even if container is fresh)
 	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
 
 	def := Definition{
