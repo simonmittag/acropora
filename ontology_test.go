@@ -70,6 +70,9 @@ func TestSeedOntology(t *testing.T) {
 		t.Fatalf("failed to initialize acropora: %v", err)
 	}
 
+	// Ensure a clean slate for deterministic test runs
+	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
+
 	def := Definition{
 		Entities: []Entity{
 			{Name: "Person"},
@@ -98,6 +101,9 @@ func TestSeedOntology(t *testing.T) {
 	}
 	if version.Hash == "" {
 		t.Error("expected non-empty version hash")
+	}
+	if version.Date.IsZero() {
+		t.Error("expected non-zero version date")
 	}
 
 	// Verify counts in DB
@@ -165,7 +171,7 @@ func TestSeedOntology(t *testing.T) {
 		t.Errorf("hashes are not deterministic: %s != %s", hash1, hash2)
 	}
 
-	if version2 != nil && version2.Hash != version.Hash {
+	if version2.Hash != "" && version2.Hash != version.Hash {
 		t.Errorf("expected same hash for same definition content")
 	}
 }

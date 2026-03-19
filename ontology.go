@@ -72,49 +72,48 @@ type OntologyTriple struct {
 
 // OntologyVersion
 type OntologyVersion struct {
-	ID        string
-	Hash      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID   string
+	Hash string
+	Date time.Time
 }
 
 // OntologySeeder is the interface for seeding an ontology.
 type OntologySeeder interface {
-	SeedOntology(ctx context.Context, db *sql.DB, def Definition) (*OntologyVersion, error)
+	SeedOntology(ctx context.Context, db *sql.DB, def Definition) (OntologyVersion, error)
 }
 
 // SeedOntology validates and writes a new ontology version to the database.
-func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition) (*OntologyVersion, error) {
+func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition) (OntologyVersion, error) {
 	// 1. Validation
 	if err := validateOntologyDefinition(def); err != nil {
-		return nil, fmt.Errorf("validation failed: %w", err)
+		return OntologyVersion{}, fmt.Errorf("validation failed: %w", err)
 	}
 
 	// 2. Compute deterministic hash
 	hash, err := computeOntologyHash(def)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compute hash: %w", err)
+		return OntologyVersion{}, fmt.Errorf("failed to compute hash: %w", err)
 	}
 
 	// 3. Database transaction
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+		return OntologyVersion{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
 	// Insert ontology version
 	versionID := uuid.New().String()
-	version := &OntologyVersion{
+	version := OntologyVersion{
 		ID:   versionID,
 		Hash: hash,
 	}
 
 	err = tx.QueryRowContext(ctx,
-		"INSERT INTO ontology_versions (id, hash) VALUES ($1, $2) RETURNING created_at, updated_at",
-		version.ID, version.Hash).Scan(&version.CreatedAt, &version.UpdatedAt)
+		"INSERT INTO ontology_versions (id, hash) VALUES ($1, $2) RETURNING created_at",
+		version.ID, version.Hash).Scan(&version.Date)
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert ontology version: %w", err)
+		return OntologyVersion{}, fmt.Errorf("failed to insert ontology version: %w", err)
 	}
 
 	// Insert entities
@@ -130,7 +129,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition) (*Ont
 			"INSERT INTO ontology_entities (id, ontology_version_id, name, metadata) VALUES ($1, $2, $3, $4)",
 			id, versionID, eDef.Name, metadata)
 		if err != nil {
-			return nil, fmt.Errorf("failed to insert entity %s: %w", eDef.Name, err)
+			return OntologyVersion{}, fmt.Errorf("failed to insert entity %s: %w", eDef.Name, err)
 		}
 		entityToID[eDef] = id
 	}
@@ -144,7 +143,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition) (*Ont
 			"INSERT INTO ontology_predicates (id, ontology_version_id, name, valid_from, valid_to) VALUES ($1, $2, $3, $4, $5)",
 			id, versionID, pDef.Name, pDef.ValidFrom, pDef.ValidTo)
 		if err != nil {
-			return nil, fmt.Errorf("failed to insert predicate %s: %w", pDef.Name, err)
+			return OntologyVersion{}, fmt.Errorf("failed to insert predicate %s: %w", pDef.Name, err)
 		}
 		predicateToID[pDef] = id
 	}
@@ -169,12 +168,12 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition) (*Ont
 			"INSERT INTO ontology_triples (id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id) VALUES ($1, $2, $3, $4, $5)",
 			triple.ID, triple.OntologyVersionID, triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to insert triple (%s, %s, %s): %w", triple.Subject.Name, triple.Predicate.Name, triple.Object.Name, err)
+			return OntologyVersion{}, fmt.Errorf("failed to insert triple (%s, %s, %s): %w", triple.Subject.Name, triple.Predicate.Name, triple.Object.Name, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+		return OntologyVersion{}, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return version, nil
