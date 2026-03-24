@@ -46,6 +46,7 @@ func (d *DB) RawDB() *sql.DB {
 
 func (d *DB) migrate(ctx context.Context) error {
 	goose.SetBaseFS(migrations)
+	goose.SetTableName("acropora_db_version")
 
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err

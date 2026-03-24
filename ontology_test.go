@@ -72,6 +72,7 @@ func TestNew(t *testing.T) {
 		"ontology_entities",
 		"ontology_predicates",
 		"ontology_triples",
+		"acropora_db_version",
 	}
 
 	for _, table := range tables {
