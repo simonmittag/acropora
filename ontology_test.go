@@ -205,3 +205,66 @@ func TestSeedOntology(t *testing.T) {
 		t.Errorf("expected same hash for same definition content")
 	}
 }
+
+func TestListAndDefaultOntologyVersions(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	a, err := New(ctx, db)
+	if err != nil {
+		t.Fatalf("failed to initialize acropora: %v", err)
+	}
+
+	// Ensure a clean slate
+	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_versions RESTART IDENTITY CASCADE")
+
+	// Seed first version
+	def1 := Definition{
+		Entities: []Entity{{Name: "A"}},
+	}
+	v1, err := a.SeedOntology(ctx, db, def1)
+	if err != nil {
+		t.Fatalf("failed to seed v1: %v", err)
+	}
+
+	// Sleep briefly to ensure different timestamps if needed, although DB now() should be enough for sequence
+	time.Sleep(100 * time.Millisecond)
+
+	// Seed second version
+	def2 := Definition{
+		Entities: []Entity{{Name: "B"}},
+	}
+	v2, err := a.SeedOntology(ctx, db, def2)
+	if err != nil {
+		t.Fatalf("failed to seed v2: %v", err)
+	}
+
+	// Test ListOntologyVersions
+	versions, err := a.ListOntologyVersions(ctx)
+	if err != nil {
+		t.Fatalf("ListOntologyVersions failed: %v", err)
+	}
+
+	if len(versions) != 2 {
+		t.Errorf("expected 2 versions, got %d", len(versions))
+	}
+
+	// Should be sorted by most recent first: v2 then v1
+	if versions[0].ID != v2.ID {
+		t.Errorf("expected first version to be %s (v2), got %s", v2.ID, versions[0].ID)
+	}
+	if versions[1].ID != v1.ID {
+		t.Errorf("expected second version to be %s (v1), got %s", v1.ID, versions[1].ID)
+	}
+
+	// Test GetDefaultOntologyVersion
+	defaultVersion, err := a.GetDefaultOntologyVersion(ctx)
+	if err != nil {
+		t.Fatalf("GetDefaultOntologyVersion failed: %v", err)
+	}
+
+	if defaultVersion.ID != v2.ID {
+		t.Errorf("expected default version to be %s (v2), got %s", v2.ID, defaultVersion.ID)
+	}
+}

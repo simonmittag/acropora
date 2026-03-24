@@ -80,6 +80,43 @@ type OntologyVersion struct {
 // OntologySeeder is the interface for seeding an ontology.
 type OntologySeeder interface {
 	SeedOntology(ctx context.Context, db *sql.DB, def Definition) (OntologyVersion, error)
+	ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error)
+	GetDefaultOntologyVersion(ctx context.Context) (OntologyVersion, error)
+}
+
+// ListOntologyVersions returns all ontology versions, sorted by most recent first.
+func (d *DB) ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error) {
+	rows, err := d.sqlDB.QueryContext(ctx, "SELECT id, hash, created_at FROM ontology_versions ORDER BY created_at DESC")
+	if err != nil {
+		return nil, fmt.Errorf("querying ontology versions: %w", err)
+	}
+	defer rows.Close()
+
+	var versions []OntologyVersion
+	for rows.Next() {
+		var v OntologyVersion
+		if err := rows.Scan(&v.ID, &v.Hash, &v.Date); err != nil {
+			return nil, fmt.Errorf("scanning ontology version: %w", err)
+		}
+		versions = append(versions, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return versions, nil
+}
+
+// GetDefaultOntologyVersion returns the latest ontology version.
+func (d *DB) GetDefaultOntologyVersion(ctx context.Context) (OntologyVersion, error) {
+	var v OntologyVersion
+	err := d.sqlDB.QueryRowContext(ctx, "SELECT id, hash, created_at FROM ontology_versions ORDER BY created_at DESC LIMIT 1").Scan(&v.ID, &v.Hash, &v.Date)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return OntologyVersion{}, fmt.Errorf("no ontology versions found")
+		}
+		return OntologyVersion{}, fmt.Errorf("querying latest ontology version: %w", err)
+	}
+	return v, nil
 }
 
 // SeedOntology validates and writes a new ontology version to the database.
