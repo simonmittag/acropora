@@ -121,13 +121,16 @@ func TestSeedOntology(t *testing.T) {
 	}
 
 	// 1. Valid seed
-	version, err := a.SeedOntology(ctx, db, def)
+	version, err := a.SeedOntology(ctx, db, def, SeedOptions{Slug: "my-custom-slug"})
 	if err != nil {
 		t.Fatalf("failed to seed ontology: %v", err)
 	}
 
 	if version.ID == "" {
 		t.Error("expected non-empty version ID")
+	}
+	if version.Slug != "my-custom-slug" {
+		t.Errorf("expected slug 'my-custom-slug', got '%s'", version.Slug)
 	}
 	if version.Hash == "" {
 		t.Error("expected non-empty version hash")
@@ -166,7 +169,7 @@ func TestSeedOntology(t *testing.T) {
 			Object:    &def.Entities[1],
 		},
 	}
-	_, err = a.SeedOntology(ctx, db, invalidDef)
+	_, err = a.SeedOntology(ctx, db, invalidDef, SeedOptions{})
 	if err == nil {
 		t.Error("expected error for invalid triple referencing missing entity, got nil")
 	}
@@ -184,13 +187,13 @@ func TestSeedOntology(t *testing.T) {
 			Object:    &def.Entities[1],
 		},
 	}
-	_, err = a.SeedOntology(ctx, db, invalidDef)
+	_, err = a.SeedOntology(ctx, db, invalidDef, SeedOptions{})
 	if err == nil {
 		t.Error("expected error for invalid triple referencing missing predicate, got nil")
 	}
 
 	// 4. Deterministic hashing
-	version2, err := a.SeedOntology(ctx, db, def)
+	version2, err := a.SeedOntology(ctx, db, def, SeedOptions{})
 	if err != nil {
 		// Might fail if hash unique constraint hits, but we want to check if hash is same
 	}
@@ -223,7 +226,7 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 	def1 := Definition{
 		Entities: []Entity{{Name: "A"}},
 	}
-	v1, err := a.SeedOntology(ctx, db, def1)
+	v1, err := a.SeedOntology(ctx, db, def1, SeedOptions{})
 	if err != nil {
 		t.Fatalf("failed to seed v1: %v", err)
 	}
@@ -235,7 +238,7 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 	def2 := Definition{
 		Entities: []Entity{{Name: "B"}},
 	}
-	v2, err := a.SeedOntology(ctx, db, def2)
+	v2, err := a.SeedOntology(ctx, db, def2, SeedOptions{})
 	if err != nil {
 		t.Fatalf("failed to seed v2: %v", err)
 	}
@@ -266,5 +269,61 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 
 	if defaultVersion.ID != v2.ID {
 		t.Errorf("expected default version to be %s (v2), got %s", v2.ID, defaultVersion.ID)
+	}
+}
+
+func TestOntologySlugs(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	a, err := New(ctx, db)
+	if err != nil {
+		t.Fatalf("failed to initialize acropora: %v", err)
+	}
+
+	// Ensure a clean slate
+	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_versions RESTART IDENTITY CASCADE")
+
+	def := Definition{Entities: []Entity{{Name: "SlugTest"}}}
+
+	// 1. Seed without slug generates one
+	v1, err := a.SeedOntology(ctx, db, def, SeedOptions{})
+	if err != nil {
+		t.Fatalf("failed to seed without slug: %v", err)
+	}
+	if v1.Slug == "" {
+		t.Error("expected generated slug, got empty")
+	}
+
+	// 2. Seed with explicit slug
+	explicitSlug := "explicit-slug-123"
+	v2, err := a.SeedOntology(ctx, db, Definition{Entities: []Entity{{Name: "Explicit"}}}, SeedOptions{Slug: explicitSlug})
+	if err != nil {
+		t.Fatalf("failed to seed with explicit slug: %v", err)
+	}
+	if v2.Slug != explicitSlug {
+		t.Errorf("expected slug %s, got %s", explicitSlug, v2.Slug)
+	}
+
+	// 3. Duplicate explicit slug fails
+	_, err = a.SeedOntology(ctx, db, Definition{Entities: []Entity{{Name: "Duplicate"}}}, SeedOptions{Slug: explicitSlug})
+	if err == nil {
+		t.Error("expected error for duplicate slug, got nil")
+	}
+
+	// 4. Get by slug
+	vFetched, err := a.GetOntologyVersionBySlug(ctx, explicitSlug)
+	if err != nil {
+		t.Fatalf("failed to get version by slug: %v", err)
+	}
+	if vFetched.ID != v2.ID {
+		t.Errorf("expected fetched ID %s, got %s", v2.ID, vFetched.ID)
+	}
+
+	// 5. Get by slug not found
+	_, err = a.GetOntologyVersionBySlug(ctx, "non-existent-slug")
+	if err == nil {
+		t.Error("expected error for non-existent slug, got nil")
 	}
 }

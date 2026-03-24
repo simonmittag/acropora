@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lucasepe/codename"
 )
 
 // Entity
@@ -73,20 +74,27 @@ type OntologyTriple struct {
 // OntologyVersion
 type OntologyVersion struct {
 	ID   string
+	Slug string
 	Hash string
 	Date time.Time
 }
 
+// SeedOptions provides configuration for seeding an ontology.
+type SeedOptions struct {
+	Slug string
+}
+
 // OntologySeeder is the interface for seeding an ontology.
 type OntologySeeder interface {
-	SeedOntology(ctx context.Context, db *sql.DB, def Definition) (OntologyVersion, error)
+	SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts SeedOptions) (OntologyVersion, error)
 	ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error)
 	GetDefaultOntologyVersion(ctx context.Context) (OntologyVersion, error)
+	GetOntologyVersionBySlug(ctx context.Context, slug string) (OntologyVersion, error)
 }
 
 // ListOntologyVersions returns all ontology versions, sorted by most recent first.
 func (d *DB) ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error) {
-	rows, err := d.sqlDB.QueryContext(ctx, "SELECT id, hash, created_at FROM ontology_versions ORDER BY created_at DESC")
+	rows, err := d.sqlDB.QueryContext(ctx, "SELECT id, slug, hash, created_at FROM ontology_versions ORDER BY created_at DESC")
 	if err != nil {
 		return nil, fmt.Errorf("querying ontology versions: %w", err)
 	}
@@ -95,7 +103,7 @@ func (d *DB) ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error
 	var versions []OntologyVersion
 	for rows.Next() {
 		var v OntologyVersion
-		if err := rows.Scan(&v.ID, &v.Hash, &v.Date); err != nil {
+		if err := rows.Scan(&v.ID, &v.Slug, &v.Hash, &v.Date); err != nil {
 			return nil, fmt.Errorf("scanning ontology version: %w", err)
 		}
 		versions = append(versions, v)
@@ -109,7 +117,7 @@ func (d *DB) ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error
 // GetDefaultOntologyVersion returns the latest ontology version.
 func (d *DB) GetDefaultOntologyVersion(ctx context.Context) (OntologyVersion, error) {
 	var v OntologyVersion
-	err := d.sqlDB.QueryRowContext(ctx, "SELECT id, hash, created_at FROM ontology_versions ORDER BY created_at DESC LIMIT 1").Scan(&v.ID, &v.Hash, &v.Date)
+	err := d.sqlDB.QueryRowContext(ctx, "SELECT id, slug, hash, created_at FROM ontology_versions ORDER BY created_at DESC LIMIT 1").Scan(&v.ID, &v.Slug, &v.Hash, &v.Date)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return OntologyVersion{}, fmt.Errorf("no ontology versions found")
@@ -119,8 +127,21 @@ func (d *DB) GetDefaultOntologyVersion(ctx context.Context) (OntologyVersion, er
 	return v, nil
 }
 
+// GetOntologyVersionBySlug returns the ontology version with the given slug.
+func (d *DB) GetOntologyVersionBySlug(ctx context.Context, slug string) (OntologyVersion, error) {
+	var v OntologyVersion
+	err := d.sqlDB.QueryRowContext(ctx, "SELECT id, slug, hash, created_at FROM ontology_versions WHERE slug = $1", slug).Scan(&v.ID, &v.Slug, &v.Hash, &v.Date)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return OntologyVersion{}, fmt.Errorf("ontology version not found: %s", slug)
+		}
+		return OntologyVersion{}, fmt.Errorf("querying ontology version by slug: %w", err)
+	}
+	return v, nil
+}
+
 // SeedOntology validates and writes a new ontology version to the database.
-func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition) (OntologyVersion, error) {
+func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts SeedOptions) (OntologyVersion, error) {
 	// 1. Validation
 	if err := validateOntologyDefinition(def); err != nil {
 		return OntologyVersion{}, fmt.Errorf("validation failed: %w", err)
@@ -139,16 +160,46 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition) (Onto
 	}
 	defer tx.Rollback()
 
+	// 4. Handle slug
+	var slug string
+	if opts.Slug != "" {
+		slug = opts.Slug
+	} else {
+		// Generate slug with retries
+		rng, err := codename.DefaultRNG()
+		if err != nil {
+			return OntologyVersion{}, fmt.Errorf("failed to get RNG: %w", err)
+		}
+
+		maxRetries := 5
+		for i := 0; i < maxRetries; i++ {
+			candidate := codename.Generate(rng, 0)
+			var exists bool
+			err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM ontology_versions WHERE slug = $1)", candidate).Scan(&exists)
+			if err != nil {
+				return OntologyVersion{}, fmt.Errorf("failed to check slug existence: %w", err)
+			}
+			if !exists {
+				slug = candidate
+				break
+			}
+			if i == maxRetries-1 {
+				return OntologyVersion{}, fmt.Errorf("failed to generate unique slug after %d attempts", maxRetries)
+			}
+		}
+	}
+
 	// Insert ontology version
 	versionID := uuid.New().String()
 	version := OntologyVersion{
 		ID:   versionID,
+		Slug: slug,
 		Hash: hash,
 	}
 
 	err = tx.QueryRowContext(ctx,
-		"INSERT INTO ontology_versions (id, hash) VALUES ($1, $2) RETURNING created_at",
-		version.ID, version.Hash).Scan(&version.Date)
+		"INSERT INTO ontology_versions (id, hash, slug) VALUES ($1, $2, $3) RETURNING created_at",
+		version.ID, version.Hash, version.Slug).Scan(&version.Date)
 	if err != nil {
 		return OntologyVersion{}, fmt.Errorf("failed to insert ontology version: %w", err)
 	}

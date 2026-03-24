@@ -3,6 +3,7 @@
 CREATE TABLE ontology_versions (
     id UUID PRIMARY KEY,
     hash TEXT NOT NULL UNIQUE,
+    slug TEXT NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
