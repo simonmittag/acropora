@@ -262,9 +262,9 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 	}
 
 	// Test GetDefaultOntologyVersion
-	defaultVersion, err := a.GetDefaultOntologyVersion(ctx)
+	defaultVersion, err := a.GetOntologyVersion(ctx, nil)
 	if err != nil {
-		t.Fatalf("GetDefaultOntologyVersion failed: %v", err)
+		t.Fatalf("GetOntologyVersion (default) failed: %v", err)
 	}
 
 	if defaultVersion.ID != v2.ID {
@@ -313,7 +313,7 @@ func TestOntologySlugs(t *testing.T) {
 	}
 
 	// 4. Get by slug
-	vFetched, err := a.GetOntologyVersionBySlug(ctx, explicitSlug)
+	vFetched, err := a.GetOntologyVersion(ctx, GetOntologyVersionOptions{OptionSlug: explicitSlug})
 	if err != nil {
 		t.Fatalf("failed to get version by slug: %v", err)
 	}
@@ -321,9 +321,36 @@ func TestOntologySlugs(t *testing.T) {
 		t.Errorf("expected fetched ID %s, got %s", v2.ID, vFetched.ID)
 	}
 
-	// 5. Get by slug not found
-	_, err = a.GetOntologyVersionBySlug(ctx, "non-existent-slug")
+	// 5. Get by hash
+	vByHash, err := a.GetOntologyVersion(ctx, GetOntologyVersionOptions{OptionHash: v2.Hash})
+	if err != nil {
+		t.Fatalf("failed to get version by hash: %v", err)
+	}
+	if vByHash.ID != v2.ID {
+		t.Errorf("expected fetched ID %s, got %s", v2.ID, vByHash.ID)
+	}
+
+	// 6. Get by ID
+	vByID, err := a.GetOntologyVersion(ctx, GetOntologyVersionOptions{OptionID: v2.ID})
+	if err != nil {
+		t.Fatalf("failed to get version by ID: %v", err)
+	}
+	if vByID.ID != v2.ID {
+		t.Errorf("expected fetched ID %s, got %s", v2.ID, vByID.ID)
+	}
+
+	// 7. Get by slug not found
+	_, err = a.GetOntologyVersion(ctx, GetOntologyVersionOptions{OptionSlug: "non-existent-slug"})
 	if err == nil {
 		t.Error("expected error for non-existent slug, got nil")
+	}
+
+	// 8. Multiple filters error
+	_, err = a.GetOntologyVersion(ctx, GetOntologyVersionOptions{
+		OptionID:   v2.ID,
+		OptionSlug: v2.Slug,
+	})
+	if err == nil {
+		t.Error("expected error for multiple filters, got nil")
 	}
 }

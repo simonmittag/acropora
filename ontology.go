@@ -84,12 +84,20 @@ type SeedOptions struct {
 	Slug string
 }
 
+// GetOntologyVersionOptions provides configuration for fetching an ontology version.
+type GetOntologyVersionOptions map[string]string
+
+const (
+	OptionID   = "id"
+	OptionHash = "hash"
+	OptionSlug = "slug"
+)
+
 // OntologySeeder is the interface for seeding an ontology.
 type OntologySeeder interface {
 	SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts SeedOptions) (OntologyVersion, error)
 	ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error)
-	GetDefaultOntologyVersion(ctx context.Context) (OntologyVersion, error)
-	GetOntologyVersionBySlug(ctx context.Context, slug string) (OntologyVersion, error)
+	GetOntologyVersion(ctx context.Context, opts GetOntologyVersionOptions) (OntologyVersion, error)
 }
 
 // ListOntologyVersions returns all ontology versions, sorted by most recent first.
@@ -114,28 +122,53 @@ func (d *DB) ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error
 	return versions, nil
 }
 
-// GetDefaultOntologyVersion returns the latest ontology version.
-func (d *DB) GetDefaultOntologyVersion(ctx context.Context) (OntologyVersion, error) {
-	var v OntologyVersion
-	err := d.sqlDB.QueryRowContext(ctx, "SELECT id, slug, hash, created_at FROM ontology_versions ORDER BY created_at DESC LIMIT 1").Scan(&v.ID, &v.Slug, &v.Hash, &v.Date)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return OntologyVersion{}, fmt.Errorf("no ontology versions found")
-		}
-		return OntologyVersion{}, fmt.Errorf("querying latest ontology version: %w", err)
+// GetOntologyVersion returns an ontology version based on the provided options.
+// If options are empty, it returns the latest (default) version.
+// Supported keys: id, hash, slug. Only one key can be provided at a time.
+func (d *DB) GetOntologyVersion(ctx context.Context, opts GetOntologyVersionOptions) (OntologyVersion, error) {
+	if len(opts) > 1 {
+		return OntologyVersion{}, fmt.Errorf("only one filter option allowed (id, hash, or slug)")
 	}
-	return v, nil
-}
 
-// GetOntologyVersionBySlug returns the ontology version with the given slug.
-func (d *DB) GetOntologyVersionBySlug(ctx context.Context, slug string) (OntologyVersion, error) {
+	query := "SELECT id, slug, hash, created_at FROM ontology_versions"
+	var arg any
+
+	if len(opts) == 0 {
+		query += " ORDER BY created_at DESC LIMIT 1"
+	} else {
+		for k, v := range opts {
+			switch k {
+			case OptionID:
+				query += " WHERE id = $1"
+				arg = v
+			case OptionHash:
+				query += " WHERE hash = $1"
+				arg = v
+			case OptionSlug:
+				query += " WHERE slug = $1"
+				arg = v
+			default:
+				return OntologyVersion{}, fmt.Errorf("unsupported filter option: %s", k)
+			}
+		}
+	}
+
 	var v OntologyVersion
-	err := d.sqlDB.QueryRowContext(ctx, "SELECT id, slug, hash, created_at FROM ontology_versions WHERE slug = $1", slug).Scan(&v.ID, &v.Slug, &v.Hash, &v.Date)
+	var err error
+	if arg != nil {
+		err = d.sqlDB.QueryRowContext(ctx, query, arg).Scan(&v.ID, &v.Slug, &v.Hash, &v.Date)
+	} else {
+		err = d.sqlDB.QueryRowContext(ctx, query).Scan(&v.ID, &v.Slug, &v.Hash, &v.Date)
+	}
+
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return OntologyVersion{}, fmt.Errorf("ontology version not found: %s", slug)
+			if len(opts) == 0 {
+				return OntologyVersion{}, fmt.Errorf("no ontology versions found")
+			}
+			return OntologyVersion{}, fmt.Errorf("ontology version not found")
 		}
-		return OntologyVersion{}, fmt.Errorf("querying ontology version by slug: %w", err)
+		return OntologyVersion{}, fmt.Errorf("querying ontology version: %w", err)
 	}
 	return v, nil
 }
