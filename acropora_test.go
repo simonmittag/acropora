@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRuntimeSession(t *testing.T) {
+func TestSession(t *testing.T) {
 	ctx := context.Background()
 	sqlDB, cleanup := setupTestDB(t)
 	defer cleanup()
