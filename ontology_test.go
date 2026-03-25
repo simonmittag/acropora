@@ -105,15 +105,15 @@ func TestSeedOntology(t *testing.T) {
 	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
 
 	def := Definition{
-		Entities: []Entity{
+		Entities: []EntityDefinition{
 			{Name: "Person"},
 			{Name: "Place"},
 		},
-		Predicates: []Predicate{
+		Predicates: []PredicateDefinition{
 			{Name: "lives_in"},
 		},
 	}
-	def.Triples = []Triple{
+	def.Triples = []TripleDefinition{
 		{
 			Subject:   &def.Entities[0],
 			Predicate: &def.Predicates[0],
@@ -136,7 +136,7 @@ func TestSeedOntology(t *testing.T) {
 	if version.Hash == "" {
 		t.Error("expected non-empty version hash")
 	}
-	if version.Date.IsZero() {
+	if version.CreatedAt.IsZero() {
 		t.Error("expected non-zero version date")
 	}
 
@@ -162,8 +162,8 @@ func TestSeedOntology(t *testing.T) {
 		Entities:   def.Entities,
 		Predicates: def.Predicates,
 	}
-	unknownEntity := Entity{Name: "Unknown"}
-	invalidDef.Triples = []Triple{
+	unknownEntity := EntityDefinition{Name: "Unknown"}
+	invalidDef.Triples = []TripleDefinition{
 		{
 			Subject:   &unknownEntity,
 			Predicate: &def.Predicates[0],
@@ -180,8 +180,8 @@ func TestSeedOntology(t *testing.T) {
 		Entities:   def.Entities,
 		Predicates: def.Predicates,
 	}
-	unknownPredicate := Predicate{Name: "unknown_predicate"}
-	invalidDef.Triples = []Triple{
+	unknownPredicate := PredicateDefinition{Name: "unknown_predicate"}
+	invalidDef.Triples = []TripleDefinition{
 		{
 			Subject:   &def.Entities[0],
 			Predicate: &unknownPredicate,
@@ -225,7 +225,7 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 
 	// Seed first version
 	def1 := Definition{
-		Entities: []Entity{{Name: "A"}},
+		Entities: []EntityDefinition{{Name: "A"}},
 	}
 	v1, err := a.SeedOntology(ctx, db, def1, SeedOptions{})
 	if err != nil {
@@ -237,7 +237,7 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 
 	// Seed second version
 	def2 := Definition{
-		Entities: []Entity{{Name: "B"}},
+		Entities: []EntityDefinition{{Name: "B"}},
 	}
 	v2, err := a.SeedOntology(ctx, db, def2, SeedOptions{})
 	if err != nil {
@@ -286,7 +286,7 @@ func TestOntologySlugs(t *testing.T) {
 	// Ensure a clean slate
 	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_versions RESTART IDENTITY CASCADE")
 
-	def := Definition{Entities: []Entity{{Name: "SlugTest"}}}
+	def := Definition{Entities: []EntityDefinition{{Name: "SlugTest"}}}
 
 	// 1. Seed without slug generates one
 	v1, err := a.SeedOntology(ctx, db, def, SeedOptions{})
@@ -299,7 +299,7 @@ func TestOntologySlugs(t *testing.T) {
 
 	// 2. Seed with explicit slug
 	explicitSlug := "explicit-slug-123"
-	v2, err := a.SeedOntology(ctx, db, Definition{Entities: []Entity{{Name: "Explicit"}}}, SeedOptions{Slug: explicitSlug})
+	v2, err := a.SeedOntology(ctx, db, Definition{Entities: []EntityDefinition{{Name: "Explicit"}}}, SeedOptions{Slug: explicitSlug})
 	if err != nil {
 		t.Fatalf("failed to seed with explicit slug: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestOntologySlugs(t *testing.T) {
 	}
 
 	// 3. Duplicate explicit slug fails
-	_, err = a.SeedOntology(ctx, db, Definition{Entities: []Entity{{Name: "Duplicate"}}}, SeedOptions{Slug: explicitSlug})
+	_, err = a.SeedOntology(ctx, db, Definition{Entities: []EntityDefinition{{Name: "Duplicate"}}}, SeedOptions{Slug: explicitSlug})
 	if err == nil {
 		t.Error("expected error for duplicate slug, got nil")
 	}

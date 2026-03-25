@@ -1,7 +1,7 @@
 -- +goose Up
 -- +goose StatementBegin
 CREATE TABLE ontology_versions (
-    id UUID PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     hash TEXT NOT NULL UNIQUE,
     slug TEXT NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -9,8 +9,8 @@ CREATE TABLE ontology_versions (
 );
 
 CREATE TABLE ontology_entities (
-    id UUID PRIMARY KEY,
-    ontology_version_id UUID NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY,
+    ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -21,8 +21,8 @@ CREATE INDEX idx_ontology_entities_ontology_version_id ON ontology_entities(onto
 CREATE INDEX idx_ontology_entities_ontology_version_id_name ON ontology_entities(ontology_version_id, name);
 
 CREATE TABLE ontology_predicates (
-    id UUID PRIMARY KEY,
-    ontology_version_id UUID NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY,
+    ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     valid_from TIMESTAMPTZ NULL,
     valid_to TIMESTAMPTZ NULL,
@@ -34,11 +34,11 @@ CREATE INDEX idx_ontology_predicates_ontology_version_id ON ontology_predicates(
 CREATE INDEX idx_ontology_predicates_ontology_version_id_name ON ontology_predicates(ontology_version_id, name);
 
 CREATE TABLE ontology_triples (
-    id UUID PRIMARY KEY,
-    ontology_version_id UUID NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
-    subject_entity_id UUID NOT NULL REFERENCES ontology_entities(id) ON DELETE CASCADE,
-    predicate_id UUID NOT NULL REFERENCES ontology_predicates(id) ON DELETE CASCADE,
-    object_entity_id UUID NOT NULL REFERENCES ontology_entities(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY,
+    ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
+    subject_entity_id TEXT NOT NULL REFERENCES ontology_entities(id) ON DELETE CASCADE,
+    predicate_id TEXT NOT NULL REFERENCES ontology_predicates(id) ON DELETE CASCADE,
+    object_entity_id TEXT NOT NULL REFERENCES ontology_entities(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (ontology_version_id, subject_entity_id, predicate_id, object_entity_id)

@@ -8,76 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/lucasepe/codename"
 )
-
-// Entity
-type Entity struct {
-	Name     string
-	Metadata json.RawMessage
-}
-
-// Predicate
-type Predicate struct {
-	Name      string
-	ValidFrom time.Time
-	ValidTo   time.Time
-}
-
-// Triple
-type Triple struct {
-	Subject   *Entity
-	Predicate *Predicate
-	Object    *Entity
-}
-
-// Definition
-type Definition struct {
-	Entities   []Entity
-	Predicates []Predicate
-	Triples    []Triple
-}
-
-// OntologyEntity
-type OntologyEntity struct {
-	ID                string
-	OntologyVersionID string
-	Entity
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
-// OntologyPredicate
-type OntologyPredicate struct {
-	ID                string
-	OntologyVersionID string
-	Predicate
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
-// OntologyTriple
-type OntologyTriple struct {
-	ID                string
-	OntologyVersionID string
-	Triple
-	SubjectEntityID string
-	PredicateID     string
-	ObjectEntityID  string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
-
-// OntologyVersion
-type OntologyVersion struct {
-	ID   string
-	Slug string
-	Hash string
-	Date time.Time
-}
 
 // SeedOptions provides configuration for seeding an ontology.
 type SeedOptions struct {
@@ -102,7 +36,7 @@ type OntologySeeder interface {
 
 // ListOntologyVersions returns all ontology versions, sorted by most recent first.
 func (d *DB) ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error) {
-	rows, err := d.sqlDB.QueryContext(ctx, "SELECT id, slug, hash, created_at FROM ontology_versions ORDER BY created_at DESC")
+	rows, err := d.sqlDB.QueryContext(ctx, "SELECT id, slug, hash, created_at, updated_at FROM ontology_versions ORDER BY created_at DESC")
 	if err != nil {
 		return nil, fmt.Errorf("querying ontology versions: %w", err)
 	}
@@ -111,7 +45,7 @@ func (d *DB) ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error
 	var versions []OntologyVersion
 	for rows.Next() {
 		var v OntologyVersion
-		if err := rows.Scan(&v.ID, &v.Slug, &v.Hash, &v.Date); err != nil {
+		if err := rows.Scan(&v.ID, &v.Slug, &v.Hash, &v.CreatedAt, &v.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning ontology version: %w", err)
 		}
 		versions = append(versions, v)
@@ -130,7 +64,7 @@ func (d *DB) GetOntologyVersion(ctx context.Context, opts GetOntologyVersionOpti
 		return OntologyVersion{}, fmt.Errorf("only one filter option allowed (id, hash, or slug)")
 	}
 
-	query := "SELECT id, slug, hash, created_at FROM ontology_versions"
+	query := "SELECT id, slug, hash, created_at, updated_at FROM ontology_versions"
 	var arg any
 
 	if len(opts) == 0 {
@@ -156,9 +90,9 @@ func (d *DB) GetOntologyVersion(ctx context.Context, opts GetOntologyVersionOpti
 	var v OntologyVersion
 	var err error
 	if arg != nil {
-		err = d.sqlDB.QueryRowContext(ctx, query, arg).Scan(&v.ID, &v.Slug, &v.Hash, &v.Date)
+		err = d.sqlDB.QueryRowContext(ctx, query, arg).Scan(&v.ID, &v.Slug, &v.Hash, &v.CreatedAt, &v.UpdatedAt)
 	} else {
-		err = d.sqlDB.QueryRowContext(ctx, query).Scan(&v.ID, &v.Slug, &v.Hash, &v.Date)
+		err = d.sqlDB.QueryRowContext(ctx, query).Scan(&v.ID, &v.Slug, &v.Hash, &v.CreatedAt, &v.UpdatedAt)
 	}
 
 	if err != nil {
@@ -204,7 +138,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 			return OntologyVersion{}, fmt.Errorf("failed to get RNG: %w", err)
 		}
 
-		maxRetries := 5
+		maxRetries := 50
 		for i := 0; i < maxRetries; i++ {
 			candidate := codename.Generate(rng, 0)
 			var exists bool
@@ -225,20 +159,22 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 	// Insert ontology version
 	versionID := uuid.New().String()
 	version := OntologyVersion{
-		ID:   versionID,
+		Persistable: Persistable{
+			ID: versionID,
+		},
 		Slug: slug,
 		Hash: hash,
 	}
 
 	err = tx.QueryRowContext(ctx,
-		"INSERT INTO ontology_versions (id, hash, slug) VALUES ($1, $2, $3) RETURNING created_at",
-		version.ID, version.Hash, version.Slug).Scan(&version.Date)
+		"INSERT INTO ontology_versions (id, hash, slug) VALUES ($1, $2, $3) RETURNING created_at, updated_at",
+		version.ID, version.Hash, version.Slug).Scan(&version.CreatedAt, &version.UpdatedAt)
 	if err != nil {
 		return OntologyVersion{}, fmt.Errorf("failed to insert ontology version: %w", err)
 	}
 
 	// Insert entities
-	entityToID := make(map[*Entity]string)
+	entityToID := make(map[*EntityDefinition]string)
 	for i := range def.Entities {
 		eDef := &def.Entities[i]
 		id := uuid.New().String()
@@ -256,7 +192,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 	}
 
 	// Insert predicates
-	predicateToID := make(map[*Predicate]string)
+	predicateToID := make(map[*PredicateDefinition]string)
 	for i := range def.Predicates {
 		pDef := &def.Predicates[i]
 		id := uuid.New().String()
@@ -276,20 +212,21 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 		predicateID := predicateToID[tDef.Predicate]
 		objectID := entityToID[tDef.Object]
 
-		triple := &OntologyTriple{
-			ID:                id,
-			OntologyVersionID: versionID,
-			Triple:            tDef,
-			SubjectEntityID:   subjectID,
-			PredicateID:       predicateID,
-			ObjectEntityID:    objectID,
+		triple := &Triple{
+			Persistable: Persistable{
+				ID:                id,
+				OntologyVersionID: versionID,
+			},
+			SubjectEntityID: subjectID,
+			PredicateID:     predicateID,
+			ObjectEntityID:  objectID,
 		}
 
 		_, err = tx.ExecContext(ctx,
 			"INSERT INTO ontology_triples (id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id) VALUES ($1, $2, $3, $4, $5)",
 			triple.ID, triple.OntologyVersionID, triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID)
 		if err != nil {
-			return OntologyVersion{}, fmt.Errorf("failed to insert triple (%s, %s, %s): %w", triple.Subject.Name, triple.Predicate.Name, triple.Object.Name, err)
+			return OntologyVersion{}, fmt.Errorf("failed to insert triple (%s, %s, %s): %w", tDef.Subject.Name, tDef.Predicate.Name, tDef.Object.Name, err)
 		}
 	}
 
@@ -302,7 +239,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 
 func validateOntologyDefinition(def Definition) error {
 	entityNames := make(map[string]bool)
-	entityPtrs := make(map[*Entity]bool)
+	entityPtrs := make(map[*EntityDefinition]bool)
 	for i := range def.Entities {
 		e := &def.Entities[i]
 		if entityNames[e.Name] {
@@ -313,7 +250,7 @@ func validateOntologyDefinition(def Definition) error {
 	}
 
 	predicateNames := make(map[string]bool)
-	predicatePtrs := make(map[*Predicate]bool)
+	predicatePtrs := make(map[*PredicateDefinition]bool)
 	for i := range def.Predicates {
 		p := &def.Predicates[i]
 		if predicateNames[p.Name] {
@@ -347,18 +284,18 @@ func computeOntologyHash(def Definition) (string, error) {
 	}
 
 	type DefinitionCanonical struct {
-		Entities   []Entity
-		Predicates []Predicate
+		Entities   []EntityDefinition
+		Predicates []PredicateDefinition
 		Triples    []TripleCanonical
 	}
 
-	entities := make([]Entity, len(def.Entities))
+	entities := make([]EntityDefinition, len(def.Entities))
 	copy(entities, def.Entities)
 	sort.Slice(entities, func(i, j int) bool {
 		return entities[i].Name < entities[j].Name
 	})
 
-	predicates := make([]Predicate, len(def.Predicates))
+	predicates := make([]PredicateDefinition, len(def.Predicates))
 	copy(predicates, def.Predicates)
 	sort.Slice(predicates, func(i, j int) bool {
 		return predicates[i].Name < predicates[j].Name
