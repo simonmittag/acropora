@@ -12,6 +12,6 @@ test:
 docker:
 	docker compose up -d
 
-# Clean build artifacts (if any)
+# Clean build artifacts (if any).
 clean:
 	go clean
