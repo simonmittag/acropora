@@ -3,7 +3,7 @@
 CREATE TABLE entities (
     id TEXT PRIMARY KEY,
     ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id),
-    name TEXT NOT NULL,
+    type TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -15,7 +15,7 @@ CREATE INDEX idx_entities_ontology_version_id_id ON entities(ontology_version_id
 CREATE TABLE predicates (
     id TEXT PRIMARY KEY,
     ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id),
-    name TEXT NOT NULL,
+    type TEXT NOT NULL,
     valid_from TIMESTAMPTZ NULL,
     valid_to TIMESTAMPTZ NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

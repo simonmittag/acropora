@@ -106,11 +106,11 @@ func TestSeedOntology(t *testing.T) {
 
 	def := Definition{
 		Entities: []EntityDefinition{
-			{Name: "Person"},
-			{Name: "Place"},
+			{Type: "Person"},
+			{Type: "Place"},
 		},
 		Predicates: []PredicateDefinition{
-			{Name: "lives_in"},
+			{Type: "lives_in"},
 		},
 	}
 	def.Triples = []TripleDefinition{
@@ -162,7 +162,7 @@ func TestSeedOntology(t *testing.T) {
 		Entities:   def.Entities,
 		Predicates: def.Predicates,
 	}
-	unknownEntity := EntityDefinition{Name: "Unknown"}
+	unknownEntity := EntityDefinition{Type: "Unknown"}
 	invalidDef.Triples = []TripleDefinition{
 		{
 			Subject:   &unknownEntity,
@@ -180,7 +180,7 @@ func TestSeedOntology(t *testing.T) {
 		Entities:   def.Entities,
 		Predicates: def.Predicates,
 	}
-	unknownPredicate := PredicateDefinition{Name: "unknown_predicate"}
+	unknownPredicate := PredicateDefinition{Type: "unknown_predicate"}
 	invalidDef.Triples = []TripleDefinition{
 		{
 			Subject:   &def.Entities[0],
@@ -225,7 +225,7 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 
 	// Seed first version
 	def1 := Definition{
-		Entities: []EntityDefinition{{Name: "A"}},
+		Entities: []EntityDefinition{{Type: "A"}},
 	}
 	v1, err := a.SeedOntology(ctx, db, def1, SeedOptions{})
 	if err != nil {
@@ -237,7 +237,7 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 
 	// Seed second version
 	def2 := Definition{
-		Entities: []EntityDefinition{{Name: "B"}},
+		Entities: []EntityDefinition{{Type: "B"}},
 	}
 	v2, err := a.SeedOntology(ctx, db, def2, SeedOptions{})
 	if err != nil {
@@ -286,7 +286,7 @@ func TestOntologySlugs(t *testing.T) {
 	// Ensure a clean slate
 	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_versions RESTART IDENTITY CASCADE")
 
-	def := Definition{Entities: []EntityDefinition{{Name: "SlugTest"}}}
+	def := Definition{Entities: []EntityDefinition{{Type: "SlugTest"}}}
 
 	// 1. Seed without slug generates one
 	v1, err := a.SeedOntology(ctx, db, def, SeedOptions{})
@@ -299,7 +299,7 @@ func TestOntologySlugs(t *testing.T) {
 
 	// 2. Seed with explicit slug
 	explicitSlug := "explicit-slug-123"
-	v2, err := a.SeedOntology(ctx, db, Definition{Entities: []EntityDefinition{{Name: "Explicit"}}}, SeedOptions{Slug: explicitSlug})
+	v2, err := a.SeedOntology(ctx, db, Definition{Entities: []EntityDefinition{{Type: "Explicit"}}}, SeedOptions{Slug: explicitSlug})
 	if err != nil {
 		t.Fatalf("failed to seed with explicit slug: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestOntologySlugs(t *testing.T) {
 	}
 
 	// 3. Duplicate explicit slug fails
-	_, err = a.SeedOntology(ctx, db, Definition{Entities: []EntityDefinition{{Name: "Duplicate"}}}, SeedOptions{Slug: explicitSlug})
+	_, err = a.SeedOntology(ctx, db, Definition{Entities: []EntityDefinition{{Type: "Duplicate"}}}, SeedOptions{Slug: explicitSlug})
 	if err == nil {
 		t.Error("expected error for duplicate slug, got nil")
 	}

@@ -183,10 +183,10 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 			metadata = json.RawMessage("{}")
 		}
 		_, err = tx.ExecContext(ctx,
-			"INSERT INTO ontology_entities (id, ontology_version_id, name, metadata) VALUES ($1, $2, $3, $4)",
-			id, versionID, eDef.Name, metadata)
+			"INSERT INTO ontology_entities (id, ontology_version_id, type, metadata) VALUES ($1, $2, $3, $4)",
+			id, versionID, eDef.Type, metadata)
 		if err != nil {
-			return OntologyVersion{}, fmt.Errorf("failed to insert entity %s: %w", eDef.Name, err)
+			return OntologyVersion{}, fmt.Errorf("failed to insert entity %s: %w", eDef.Type, err)
 		}
 		entityToID[eDef] = id
 	}
@@ -197,10 +197,10 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 		pDef := &def.Predicates[i]
 		id := uuid.New().String()
 		_, err = tx.ExecContext(ctx,
-			"INSERT INTO ontology_predicates (id, ontology_version_id, name, valid_from, valid_to) VALUES ($1, $2, $3, $4, $5)",
-			id, versionID, pDef.Name, pDef.ValidFrom, pDef.ValidTo)
+			"INSERT INTO ontology_predicates (id, ontology_version_id, type, valid_from, valid_to) VALUES ($1, $2, $3, $4, $5)",
+			id, versionID, pDef.Type, pDef.ValidFrom, pDef.ValidTo)
 		if err != nil {
-			return OntologyVersion{}, fmt.Errorf("failed to insert predicate %s: %w", pDef.Name, err)
+			return OntologyVersion{}, fmt.Errorf("failed to insert predicate %s: %w", pDef.Type, err)
 		}
 		predicateToID[pDef] = id
 	}
@@ -226,7 +226,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 			"INSERT INTO ontology_triples (id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id) VALUES ($1, $2, $3, $4, $5)",
 			triple.ID, triple.OntologyVersionID, triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID)
 		if err != nil {
-			return OntologyVersion{}, fmt.Errorf("failed to insert triple (%s, %s, %s): %w", tDef.Subject.Name, tDef.Predicate.Name, tDef.Object.Name, err)
+			return OntologyVersion{}, fmt.Errorf("failed to insert triple (%s, %s, %s): %w", tDef.Subject.Type, tDef.Predicate.Type, tDef.Object.Type, err)
 		}
 	}
 
@@ -238,25 +238,25 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 }
 
 func validateOntologyDefinition(def Definition) error {
-	entityNames := make(map[string]bool)
+	entityTypes := make(map[string]bool)
 	entityPtrs := make(map[*EntityDefinition]bool)
 	for i := range def.Entities {
 		e := &def.Entities[i]
-		if entityNames[e.Name] {
-			return fmt.Errorf("duplicate entity name: %s", e.Name)
+		if entityTypes[e.Type] {
+			return fmt.Errorf("duplicate entity type: %s", e.Type)
 		}
-		entityNames[e.Name] = true
+		entityTypes[e.Type] = true
 		entityPtrs[e] = true
 	}
 
-	predicateNames := make(map[string]bool)
+	predicateTypes := make(map[string]bool)
 	predicatePtrs := make(map[*PredicateDefinition]bool)
 	for i := range def.Predicates {
 		p := &def.Predicates[i]
-		if predicateNames[p.Name] {
-			return fmt.Errorf("duplicate predicate name: %s", p.Name)
+		if predicateTypes[p.Type] {
+			return fmt.Errorf("duplicate predicate type: %s", p.Type)
 		}
-		predicateNames[p.Name] = true
+		predicateTypes[p.Type] = true
 		predicatePtrs[p] = true
 	}
 
@@ -278,9 +278,9 @@ func validateOntologyDefinition(def Definition) error {
 func computeOntologyHash(def Definition) (string, error) {
 	// To compute a stable hash with pointers, we transform it into a canonical representation using names
 	type TripleCanonical struct {
-		SubjectName   string
-		PredicateName string
-		ObjectName    string
+		SubjectType   string
+		PredicateType string
+		ObjectType    string
 	}
 
 	type DefinitionCanonical struct {
@@ -292,31 +292,31 @@ func computeOntologyHash(def Definition) (string, error) {
 	entities := make([]EntityDefinition, len(def.Entities))
 	copy(entities, def.Entities)
 	sort.Slice(entities, func(i, j int) bool {
-		return entities[i].Name < entities[j].Name
+		return entities[i].Type < entities[j].Type
 	})
 
 	predicates := make([]PredicateDefinition, len(def.Predicates))
 	copy(predicates, def.Predicates)
 	sort.Slice(predicates, func(i, j int) bool {
-		return predicates[i].Name < predicates[j].Name
+		return predicates[i].Type < predicates[j].Type
 	})
 
 	triples := make([]TripleCanonical, len(def.Triples))
 	for i, t := range def.Triples {
 		triples[i] = TripleCanonical{
-			SubjectName:   t.Subject.Name,
-			PredicateName: t.Predicate.Name,
-			ObjectName:    t.Object.Name,
+			SubjectType:   t.Subject.Type,
+			PredicateType: t.Predicate.Type,
+			ObjectType:    t.Object.Type,
 		}
 	}
 	sort.Slice(triples, func(i, j int) bool {
-		if triples[i].SubjectName != triples[j].SubjectName {
-			return triples[i].SubjectName < triples[j].SubjectName
+		if triples[i].SubjectType != triples[j].SubjectType {
+			return triples[i].SubjectType < triples[j].SubjectType
 		}
-		if triples[i].PredicateName != triples[j].PredicateName {
-			return triples[i].PredicateName < triples[j].PredicateName
+		if triples[i].PredicateType != triples[j].PredicateType {
+			return triples[i].PredicateType < triples[j].PredicateType
 		}
-		return triples[i].ObjectName < triples[j].ObjectName
+		return triples[i].ObjectType < triples[j].ObjectType
 	})
 
 	canonicalDef := DefinitionCanonical{

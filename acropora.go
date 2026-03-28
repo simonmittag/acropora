@@ -28,20 +28,20 @@ func (d *DB) NewSession(version OntologyVersion) *Session {
 
 // InsertEntity inserts a new entity into the runtime.
 func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, error) {
-	if entity.Name == "" {
-		return Entity{}, errors.New("entity name cannot be empty")
+	if entity.Type == "" {
+		return Entity{}, errors.New("entity type cannot be empty")
 	}
 
 	// Validate against ontology
 	var exists bool
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM ontology_entities WHERE ontology_version_id = $1 AND name = $2)",
-		s.version.ID, entity.Name).Scan(&exists)
+		"SELECT EXISTS(SELECT 1 FROM ontology_entities WHERE ontology_version_id = $1 AND type = $2)",
+		s.version.ID, entity.Type).Scan(&exists)
 	if err != nil {
 		return Entity{}, fmt.Errorf("validating entity against ontology: %w", err)
 	}
 	if !exists {
-		return Entity{}, fmt.Errorf("entity name %q not allowed by ontology version %s", entity.Name, s.version.Slug)
+		return Entity{}, fmt.Errorf("entity type %q not allowed by ontology version %s", entity.Type, s.version.Slug)
 	}
 
 	if entity.ID == "" {
@@ -54,10 +54,10 @@ func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, erro
 
 	now := time.Now()
 	err = s.db.sqlDB.QueryRowContext(ctx,
-		`INSERT INTO entities (id, ontology_version_id, name, metadata, created_at, updated_at)
+		`INSERT INTO entities (id, ontology_version_id, type, metadata, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING created_at, updated_at`,
-		entity.ID, entity.OntologyVersionID, entity.Name, entity.Metadata, now, now).Scan(&entity.CreatedAt, &entity.UpdatedAt)
+		entity.ID, entity.OntologyVersionID, entity.Type, entity.Metadata, now, now).Scan(&entity.CreatedAt, &entity.UpdatedAt)
 	if err != nil {
 		return Entity{}, fmt.Errorf("inserting entity: %w", err)
 	}
@@ -69,8 +69,8 @@ func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, erro
 func (s *Session) GetEntityByID(ctx context.Context, id string) (Entity, error) {
 	var e Entity
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT id, ontology_version_id, name, metadata, created_at, updated_at FROM entities WHERE id = $1 AND ontology_version_id = $2",
-		id, s.version.ID).Scan(&e.ID, &e.OntologyVersionID, &e.Name, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
+		"SELECT id, ontology_version_id, type, metadata, created_at, updated_at FROM entities WHERE id = $1 AND ontology_version_id = $2",
+		id, s.version.ID).Scan(&e.ID, &e.OntologyVersionID, &e.Type, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Entity{}, fmt.Errorf("entity %s not found in session ontology version", id)
@@ -82,8 +82,8 @@ func (s *Session) GetEntityByID(ctx context.Context, id string) (Entity, error) 
 
 // InsertPredicate inserts a new predicate into the runtime.
 func (s *Session) InsertPredicate(ctx context.Context, predicate Predicate) (Predicate, error) {
-	if predicate.Name == "" {
-		return Predicate{}, errors.New("predicate name cannot be empty")
+	if predicate.Type == "" {
+		return Predicate{}, errors.New("predicate type cannot be empty")
 	}
 
 	if !predicate.ValidFrom.IsZero() && !predicate.ValidTo.IsZero() {
@@ -95,13 +95,13 @@ func (s *Session) InsertPredicate(ctx context.Context, predicate Predicate) (Pre
 	// Validate against ontology
 	var exists bool
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM ontology_predicates WHERE ontology_version_id = $1 AND name = $2)",
-		s.version.ID, predicate.Name).Scan(&exists)
+		"SELECT EXISTS(SELECT 1 FROM ontology_predicates WHERE ontology_version_id = $1 AND type = $2)",
+		s.version.ID, predicate.Type).Scan(&exists)
 	if err != nil {
 		return Predicate{}, fmt.Errorf("validating predicate against ontology: %w", err)
 	}
 	if !exists {
-		return Predicate{}, fmt.Errorf("predicate name %q not allowed by ontology version %s", predicate.Name, s.version.Slug)
+		return Predicate{}, fmt.Errorf("predicate type %q not allowed by ontology version %s", predicate.Type, s.version.Slug)
 	}
 
 	if predicate.ID == "" {
@@ -110,10 +110,10 @@ func (s *Session) InsertPredicate(ctx context.Context, predicate Predicate) (Pre
 	predicate.OntologyVersionID = s.version.ID
 	now := time.Now()
 	err = s.db.sqlDB.QueryRowContext(ctx,
-		`INSERT INTO predicates (id, ontology_version_id, name, valid_from, valid_to, created_at, updated_at)
+		`INSERT INTO predicates (id, ontology_version_id, type, valid_from, valid_to, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING created_at, updated_at`,
-		predicate.ID, predicate.OntologyVersionID, predicate.Name, predicate.ValidFrom, predicate.ValidTo, now, now).Scan(&predicate.CreatedAt, &predicate.UpdatedAt)
+		predicate.ID, predicate.OntologyVersionID, predicate.Type, predicate.ValidFrom, predicate.ValidTo, now, now).Scan(&predicate.CreatedAt, &predicate.UpdatedAt)
 	if err != nil {
 		return Predicate{}, fmt.Errorf("inserting predicate: %w", err)
 	}
@@ -125,8 +125,8 @@ func (s *Session) InsertPredicate(ctx context.Context, predicate Predicate) (Pre
 func (s *Session) GetPredicateByID(ctx context.Context, id string) (Predicate, error) {
 	var p Predicate
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT id, ontology_version_id, name, valid_from, valid_to, created_at, updated_at FROM predicates WHERE id = $1 AND ontology_version_id = $2",
-		id, s.version.ID).Scan(&p.ID, &p.OntologyVersionID, &p.Name, &p.ValidFrom, &p.ValidTo, &p.CreatedAt, &p.UpdatedAt)
+		"SELECT id, ontology_version_id, type, valid_from, valid_to, created_at, updated_at FROM predicates WHERE id = $1 AND ontology_version_id = $2",
+		id, s.version.ID).Scan(&p.ID, &p.OntologyVersionID, &p.Type, &p.ValidFrom, &p.ValidTo, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Predicate{}, fmt.Errorf("predicate %s not found in session ontology version", id)
@@ -160,10 +160,10 @@ func (s *Session) InsertTriple(ctx context.Context, triple Triple) (Triple, erro
 	}
 
 	// 1. Validate referenced runtime rows exist and are in the same ontology version
-	var subjectName, predicateName, objectName string
+	var subjectType, predicateType, objectType string
 	err = s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT name FROM entities WHERE id = $1 AND ontology_version_id = $2",
-		triple.SubjectEntityID, s.version.ID).Scan(&subjectName)
+		"SELECT type FROM entities WHERE id = $1 AND ontology_version_id = $2",
+		triple.SubjectEntityID, s.version.ID).Scan(&subjectType)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Triple{}, fmt.Errorf("subject entity %s not found in session ontology version", triple.SubjectEntityID)
@@ -172,8 +172,8 @@ func (s *Session) InsertTriple(ctx context.Context, triple Triple) (Triple, erro
 	}
 
 	err = s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT name FROM predicates WHERE id = $1 AND ontology_version_id = $2",
-		triple.PredicateID, s.version.ID).Scan(&predicateName)
+		"SELECT type FROM predicates WHERE id = $1 AND ontology_version_id = $2",
+		triple.PredicateID, s.version.ID).Scan(&predicateType)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Triple{}, fmt.Errorf("predicate %s not found in session ontology version", triple.PredicateID)
@@ -182,8 +182,8 @@ func (s *Session) InsertTriple(ctx context.Context, triple Triple) (Triple, erro
 	}
 
 	err = s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT name FROM entities WHERE id = $1 AND ontology_version_id = $2",
-		triple.ObjectEntityID, s.version.ID).Scan(&objectName)
+		"SELECT type FROM entities WHERE id = $1 AND ontology_version_id = $2",
+		triple.ObjectEntityID, s.version.ID).Scan(&objectType)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Triple{}, fmt.Errorf("object entity %s not found in session ontology version", triple.ObjectEntityID)
@@ -191,7 +191,7 @@ func (s *Session) InsertTriple(ctx context.Context, triple Triple) (Triple, erro
 		return Triple{}, fmt.Errorf("checking object entity: %w", err)
 	}
 
-	// 2. Validate ontology rule: subject name + predicate name + object name exists in ontology_triples
+	// 2. Validate ontology rule: subject type + predicate type + object type exists in ontology_triples
 	var exists bool
 	err = s.db.sqlDB.QueryRowContext(ctx,
 		`SELECT EXISTS(
@@ -200,14 +200,14 @@ func (s *Session) InsertTriple(ctx context.Context, triple Triple) (Triple, erro
 			JOIN ontology_predicates op ON ot.predicate_id = op.id
 			JOIN ontology_entities ooe ON ot.object_entity_id = ooe.id
 			WHERE ot.ontology_version_id = $1
-			AND ose.name = $2 AND op.name = $3 AND ooe.name = $4
+			AND ose.type = $2 AND op.type = $3 AND ooe.type = $4
 		)`,
-		s.version.ID, subjectName, predicateName, objectName).Scan(&exists)
+		s.version.ID, subjectType, predicateType, objectType).Scan(&exists)
 	if err != nil {
 		return Triple{}, fmt.Errorf("validating triple against ontology: %w", err)
 	}
 	if !exists {
-		return Triple{}, fmt.Errorf("triple (%s, %s, %s) not allowed by ontology version %s", subjectName, predicateName, objectName, s.version.Slug)
+		return Triple{}, fmt.Errorf("triple (%s, %s, %s) not allowed by ontology version %s", subjectType, predicateType, objectType, s.version.Slug)
 	}
 
 	if triple.ID == "" {
@@ -305,15 +305,15 @@ func (s *Session) LinkEntityAlias(ctx context.Context, aliasEntityID, canonicalE
 	defer tx.Rollback()
 
 	// 1. Ensure both exist and belong to session ontology version
-	var aName, cName string
-	err = tx.QueryRowContext(ctx, "SELECT name FROM entities WHERE id = $1 AND ontology_version_id = $2", aliasEntityID, s.version.ID).Scan(&aName)
+	var aType, cType string
+	err = tx.QueryRowContext(ctx, "SELECT type FROM entities WHERE id = $1 AND ontology_version_id = $2", aliasEntityID, s.version.ID).Scan(&aType)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return EntityAlias{}, fmt.Errorf("alias entity %s not found in session ontology version", aliasEntityID)
 		}
 		return EntityAlias{}, fmt.Errorf("checking alias entity %s: %w", aliasEntityID, err)
 	}
-	err = tx.QueryRowContext(ctx, "SELECT name FROM entities WHERE id = $1 AND ontology_version_id = $2", canonicalEntityID, s.version.ID).Scan(&cName)
+	err = tx.QueryRowContext(ctx, "SELECT type FROM entities WHERE id = $1 AND ontology_version_id = $2", canonicalEntityID, s.version.ID).Scan(&cType)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return EntityAlias{}, fmt.Errorf("canonical entity %s not found in session ontology version", canonicalEntityID)

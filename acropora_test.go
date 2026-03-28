@@ -23,11 +23,11 @@ func TestSession(t *testing.T) {
 
 	// 1. Seed ontology
 	entities := []EntityDefinition{
-		{Name: "Person"},
-		{Name: "Company"},
+		{Type: "Person"},
+		{Type: "Company"},
 	}
 	predicates := []PredicateDefinition{
-		{Name: "works_at"},
+		{Type: "works_at"},
 	}
 	def := Definition{
 		Entities:   entities,
@@ -50,7 +50,7 @@ func TestSession(t *testing.T) {
 	t.Run("EntityDefinition insert and read", func(t *testing.T) {
 		e := Entity{
 			EntityDefinition: EntityDefinition{
-				Name:     "Person",
+				Type:     "Person",
 				Metadata: json.RawMessage(`{"age": 30}`),
 			},
 		}
@@ -58,18 +58,18 @@ func TestSession(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEmpty(t, inserted.ID)
 		assert.Equal(t, version.ID, inserted.OntologyVersionID)
-		assert.Equal(t, "Person", inserted.Name)
+		assert.Equal(t, "Person", inserted.Type)
 
 		fetched, err := session.GetEntityByID(ctx, inserted.ID)
 		require.NoError(t, err)
 		assert.Equal(t, inserted.ID, fetched.ID)
-		assert.Equal(t, inserted.Name, fetched.Name)
+		assert.Equal(t, inserted.Type, fetched.Type)
 	})
 
 	t.Run("EntityDefinition validation failure", func(t *testing.T) {
 		e := Entity{
 			EntityDefinition: EntityDefinition{
-				Name: "InvalidEntity",
+				Type: "InvalidEntity",
 			},
 		}
 		_, err := session.InsertEntity(ctx, e)
@@ -81,7 +81,7 @@ func TestSession(t *testing.T) {
 		now := time.Now()
 		p := Predicate{
 			PredicateDefinition: PredicateDefinition{
-				Name:      "works_at",
+				Type:      "works_at",
 				ValidFrom: now,
 			},
 		}
@@ -98,7 +98,7 @@ func TestSession(t *testing.T) {
 	t.Run("PredicateDefinition validation failure", func(t *testing.T) {
 		p := Predicate{
 			PredicateDefinition: PredicateDefinition{
-				Name: "invalid_predicate",
+				Type: "invalid_predicate",
 			},
 		}
 		_, err := session.InsertPredicate(ctx, p)
@@ -108,11 +108,11 @@ func TestSession(t *testing.T) {
 
 	t.Run("TripleDefinition insert and read", func(t *testing.T) {
 		// Create entities and predicate
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
-		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Company"}})
+		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}})
 		require.NoError(t, err)
-		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Name: "works_at"}})
+		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
 
 		triple := Triple{
@@ -137,7 +137,7 @@ func TestSession(t *testing.T) {
 	})
 
 	t.Run("TripleDefinition validation failure - semantic", func(t *testing.T) {
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
 		// Try to make Person works_at Person (not allowed by ontology)
 		triple := Triple{
@@ -149,7 +149,7 @@ func TestSession(t *testing.T) {
 		assert.Error(t, err)
 
 		// Now with valid runtime rows but invalid semantic
-		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Name: "works_at"}})
+		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
 		triple.PredicateID = worksAt.ID
 		_, err = session.InsertTriple(ctx, triple)
@@ -159,13 +159,13 @@ func TestSession(t *testing.T) {
 
 	t.Run("Entity Aliasing", func(t *testing.T) {
 		// Setup
-		a, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		a, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
-		b, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		b, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
-		c, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Company"}})
+		c, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}})
 		require.NoError(t, err)
-		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Name: "works_at"}})
+		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
 
 		// Test A: Simple alias link
@@ -195,9 +195,9 @@ func TestSession(t *testing.T) {
 		// To test this we need a triple that WAS on B before it was linked, OR just insert it bypass canonicalization if we want to be sure.
 		// Actually, let's just use the Session to insert it BEFORE linking.
 
-		d, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Company"}})
+		d, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}})
 		require.NoError(t, err)
-		b2, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		b2, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
 		_, err = session.InsertTriple(ctx, Triple{SubjectEntityID: b2.ID, PredicateID: worksAt.ID, ObjectEntityID: d.ID})
 		require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestSession(t *testing.T) {
 		assert.Equal(t, outgoingA, outgoingB2)
 
 		// Test C: New writes via alias canonicalize
-		e, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Company"}})
+		e, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}})
 		require.NoError(t, err)
 		tr, err := session.InsertTriple(ctx, Triple{SubjectEntityID: b.ID, PredicateID: worksAt.ID, ObjectEntityID: e.ID})
 		require.NoError(t, err)
@@ -229,11 +229,11 @@ func TestSession(t *testing.T) {
 
 		// Test D: Child alias reparenting
 		// D -> B, then B -> A
-		entD, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		entD, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
-		entB, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		entB, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
-		entA, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		entA, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
 
 		_, err = session.LinkEntityAlias(ctx, entD.ID, entB.ID, nil)
@@ -260,7 +260,7 @@ func TestSession(t *testing.T) {
 		// Test F: Cross-version rejection
 		// Create a slightly different definition to avoid hash collision
 		def2 := Definition{
-			Entities:   append([]EntityDefinition{{Name: "Dummy"}}, def.Entities...),
+			Entities:   append([]EntityDefinition{{Type: "Dummy"}}, def.Entities...),
 			Predicates: def.Predicates,
 		}
 		// Re-point triples to the new entities slice to pass pointer validation in SeedOntology
@@ -275,7 +275,7 @@ func TestSession(t *testing.T) {
 		version2, err := db.SeedOntology(ctx, sqlDB, def2, SeedOptions{Slug: "v2"})
 		require.NoError(t, err)
 		session2 := db.NewSession(version2)
-		entV2, err := session2.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Name: "Person"}})
+		entV2, err := session2.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
 		require.NoError(t, err)
 
 		_, err = session.LinkEntityAlias(ctx, entV2.ID, a.ID, nil)

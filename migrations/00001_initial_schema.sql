@@ -11,19 +11,19 @@ CREATE TABLE ontology_versions (
 CREATE TABLE ontology_entities (
     id TEXT PRIMARY KEY,
     ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
+    type TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_ontology_entities_ontology_version_id ON ontology_entities(ontology_version_id);
-CREATE INDEX idx_ontology_entities_ontology_version_id_name ON ontology_entities(ontology_version_id, name);
+CREATE INDEX idx_ontology_entities_ontology_version_id_type ON ontology_entities(ontology_version_id, type);
 
 CREATE TABLE ontology_predicates (
     id TEXT PRIMARY KEY,
     ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
+    type TEXT NOT NULL,
     valid_from TIMESTAMPTZ NULL,
     valid_to TIMESTAMPTZ NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -31,7 +31,7 @@ CREATE TABLE ontology_predicates (
 );
 
 CREATE INDEX idx_ontology_predicates_ontology_version_id ON ontology_predicates(ontology_version_id);
-CREATE INDEX idx_ontology_predicates_ontology_version_id_name ON ontology_predicates(ontology_version_id, name);
+CREATE INDEX idx_ontology_predicates_ontology_version_id_type ON ontology_predicates(ontology_version_id, type);
 
 CREATE TABLE ontology_triples (
     id TEXT PRIMARY KEY,

@@ -17,13 +17,13 @@ type Persistable struct {
 
 // EntityDefinition represents the core properties of an entity.
 type EntityDefinition struct {
-	Name     string
+	Type     string
 	Metadata json.RawMessage
 }
 
 // PredicateDefinition represents the core properties of a predicate.
 type PredicateDefinition struct {
-	Name      string
+	Type      string
 	ValidFrom time.Time
 	ValidTo   time.Time
 }
