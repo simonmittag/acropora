@@ -70,3 +70,11 @@ type Triple struct {
 	PredicateID     string
 	ObjectEntityID  string
 }
+
+// EntityAlias represents a runtime link between two entities.
+type EntityAlias struct {
+	Persistable
+	AliasEntityID     string
+	CanonicalEntityID string
+	Metadata          json.RawMessage
+}

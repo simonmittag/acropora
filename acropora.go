@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // Session is a version-bound runtime session.
@@ -147,9 +148,20 @@ func (s *Session) InsertTriple(ctx context.Context, triple Triple) (Triple, erro
 		return Triple{}, errors.New("object entity ID cannot be zero")
 	}
 
+	// Canonicalize subject and object before validation and insert
+	var err error
+	triple.SubjectEntityID, err = s.GetCanonicalEntityID(ctx, triple.SubjectEntityID)
+	if err != nil {
+		return Triple{}, fmt.Errorf("canonicalizing subject: %w", err)
+	}
+	triple.ObjectEntityID, err = s.GetCanonicalEntityID(ctx, triple.ObjectEntityID)
+	if err != nil {
+		return Triple{}, fmt.Errorf("canonicalizing object: %w", err)
+	}
+
 	// 1. Validate referenced runtime rows exist and are in the same ontology version
 	var subjectName, predicateName, objectName string
-	err := s.db.sqlDB.QueryRowContext(ctx,
+	err = s.db.sqlDB.QueryRowContext(ctx,
 		"SELECT name FROM entities WHERE id = $1 AND ontology_version_id = $2",
 		triple.SubjectEntityID, s.version.ID).Scan(&subjectName)
 	if err != nil {
@@ -230,27 +242,241 @@ func (s *Session) GetTripleByID(ctx context.Context, id string) (Triple, error) 
 	return t, nil
 }
 
-// GetOutgoingTriples returns all triples where subject_entity_id matches, scoped to the session's ontology version.
-func (s *Session) GetOutgoingTriples(ctx context.Context, subjectEntityID string) ([]Triple, error) {
+// GetOutgoingTriples returns all triples where subject_entity_id matches (expanded by alias group),
+// scoped to the session's ontology version, and normalized to the canonical root.
+func (s *Session) GetOutgoingTriples(ctx context.Context, entityID string) ([]Triple, error) {
+	group, canonicalID, err := s.GetAliasGroupEntityIDs(ctx, entityID)
+	if err != nil {
+		return nil, fmt.Errorf("resolving alias group: %w", err)
+	}
+
 	rows, err := s.db.sqlDB.QueryContext(ctx,
-		"SELECT id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id, created_at, updated_at FROM triples WHERE subject_entity_id = $1 AND ontology_version_id = $2",
-		subjectEntityID, s.version.ID)
+		"SELECT id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id, created_at, updated_at FROM triples WHERE subject_entity_id = ANY($1) AND ontology_version_id = $2",
+		pq.Array(group), s.version.ID)
 	if err != nil {
 		return nil, fmt.Errorf("querying outgoing triples: %w", err)
 	}
 	defer rows.Close()
 
 	var triples []Triple
+	seen := make(map[string]bool)
+
 	for rows.Next() {
 		var t Triple
 		if err := rows.Scan(&t.ID, &t.OntologyVersionID, &t.SubjectEntityID, &t.PredicateID, &t.ObjectEntityID, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning triple: %w", err)
 		}
-		triples = append(triples, t)
+
+		// Normalize subject
+		t.SubjectEntityID = canonicalID
+
+		// Normalize object
+		objCanonical, err := s.GetCanonicalEntityID(ctx, t.ObjectEntityID)
+		if err == nil {
+			t.ObjectEntityID = objCanonical
+		}
+
+		// Deduplicate based on canonical (Subject, Predicate, Object)
+		key := fmt.Sprintf("%s|%s|%s", t.SubjectEntityID, t.PredicateID, t.ObjectEntityID)
+		if !seen[key] {
+			triples = append(triples, t)
+			seen[key] = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating triples: %w", err)
 	}
-
 	return triples, nil
+}
+
+// LinkEntityAlias links an alias entity to a canonical root entity.
+func (s *Session) LinkEntityAlias(ctx context.Context, aliasEntityID, canonicalEntityID string, metadata json.RawMessage) (EntityAlias, error) {
+	if aliasEntityID == "" || canonicalEntityID == "" {
+		return EntityAlias{}, errors.New("entity IDs cannot be empty")
+	}
+	if aliasEntityID == canonicalEntityID {
+		return EntityAlias{}, errors.New("cannot link entity to itself")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return EntityAlias{}, err
+	}
+	defer tx.Rollback()
+
+	// 1. Ensure both exist and belong to session ontology version
+	var aName, cName string
+	err = tx.QueryRowContext(ctx, "SELECT name FROM entities WHERE id = $1 AND ontology_version_id = $2", aliasEntityID, s.version.ID).Scan(&aName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return EntityAlias{}, fmt.Errorf("alias entity %s not found in session ontology version", aliasEntityID)
+		}
+		return EntityAlias{}, fmt.Errorf("checking alias entity %s: %w", aliasEntityID, err)
+	}
+	err = tx.QueryRowContext(ctx, "SELECT name FROM entities WHERE id = $1 AND ontology_version_id = $2", canonicalEntityID, s.version.ID).Scan(&cName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return EntityAlias{}, fmt.Errorf("canonical entity %s not found in session ontology version", canonicalEntityID)
+		}
+		return EntityAlias{}, fmt.Errorf("checking canonical entity %s: %w", canonicalEntityID, err)
+	}
+
+	// 2. Resolve canonicalEntityID to its canonical root
+	rootID, err := s.getCanonicalEntityIDTx(ctx, tx, canonicalEntityID)
+	if err != nil {
+		return EntityAlias{}, err
+	}
+
+	// 3. Resolve aliasEntityID to its root (to check for cycles or redundant moves)
+	aliasRootID, err := s.getCanonicalEntityIDTx(ctx, tx, aliasEntityID)
+	if err != nil {
+		return EntityAlias{}, err
+	}
+
+	if aliasRootID == rootID {
+		return EntityAlias{}, errors.New("entities are already in the same alias group")
+	}
+
+	// 4. Reject if operation would create cycle (if rootID is an alias of aliasEntityID - impossible if graph is flat and we resolved rootID)
+	// But let's be explicit: if someone tries to link A -> B when B -> A exists.
+	// getCanonicalEntityIDTx(B) would return A. So we'd try to link A -> A, which is rejected above.
+
+	// 5. Reparent any aliases currently pointing to aliasEntityID (or its group if it was a root)
+	// Actually, if aliasEntityID was a root, we move it and ALL its children to the new root.
+	// If aliasEntityID was already an alias, we move JUST it (it has no children).
+	// But according to rule 4: "migrate C's alias link to point directly to A".
+	// This means if B -> A, and we link A -> X, then B must point to X.
+	_, err = tx.ExecContext(ctx,
+		"UPDATE entity_aliases SET canonical_entity_id = $1, updated_at = now() WHERE canonical_entity_id = $2 AND ontology_version_id = $3",
+		rootID, aliasEntityID, s.version.ID)
+	if err != nil {
+		return EntityAlias{}, fmt.Errorf("reparenting aliases: %w", err)
+	}
+
+	// 6. Create or update alias link for aliasEntityID -> rootID
+	if metadata == nil {
+		metadata = json.RawMessage("{}")
+	}
+	now := time.Now()
+	var ea EntityAlias
+	ea.ID = uuid.New().String()
+	ea.AliasEntityID = aliasEntityID
+	ea.CanonicalEntityID = rootID
+	ea.Metadata = metadata
+	ea.OntologyVersionID = s.version.ID
+
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO entity_aliases (id, ontology_version_id, alias_entity_id, canonical_entity_id, metadata, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 ON CONFLICT (ontology_version_id, alias_entity_id) DO UPDATE 
+		 SET canonical_entity_id = EXCLUDED.canonical_entity_id, 
+		     metadata = EXCLUDED.metadata,
+		     updated_at = EXCLUDED.updated_at
+		 RETURNING id, created_at, updated_at`,
+		ea.ID, ea.OntologyVersionID, ea.AliasEntityID, ea.CanonicalEntityID, ea.Metadata, now, now).Scan(&ea.ID, &ea.CreatedAt, &ea.UpdatedAt)
+	if err != nil {
+		return EntityAlias{}, fmt.Errorf("upserting alias: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return EntityAlias{}, err
+	}
+
+	return ea, nil
+}
+
+// GetCanonicalEntityID returns the canonical root ID for an entity.
+func (s *Session) GetCanonicalEntityID(ctx context.Context, entityID string) (string, error) {
+	var canonicalID string
+	err := s.db.sqlDB.QueryRowContext(ctx,
+		"SELECT canonical_entity_id FROM entity_aliases WHERE alias_entity_id = $1 AND ontology_version_id = $2",
+		entityID, s.version.ID).Scan(&canonicalID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return entityID, nil
+		}
+		return "", err
+	}
+	return canonicalID, nil
+}
+
+func (s *Session) getCanonicalEntityIDTx(ctx context.Context, tx *sql.Tx, entityID string) (string, error) {
+	var canonicalID string
+	err := tx.QueryRowContext(ctx,
+		"SELECT canonical_entity_id FROM entity_aliases WHERE alias_entity_id = $1 AND ontology_version_id = $2",
+		entityID, s.version.ID).Scan(&canonicalID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return entityID, nil
+		}
+		return "", err
+	}
+	return canonicalID, nil
+}
+
+// GetAliasGroupEntityIDs returns all entity IDs in the alias group.
+func (s *Session) GetAliasGroupEntityIDs(ctx context.Context, entityID string) ([]string, string, error) {
+	canonicalID, err := s.GetCanonicalEntityID(ctx, entityID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := s.db.sqlDB.QueryContext(ctx,
+		"SELECT alias_entity_id FROM entity_aliases WHERE canonical_entity_id = $1 AND ontology_version_id = $2",
+		canonicalID, s.version.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	group := []string{canonicalID}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, "", err
+		}
+		group = append(group, id)
+	}
+	return group, canonicalID, nil
+}
+
+// MergeEntityMetadata merges metadata from multiple entities, with canonical winning on conflict.
+func MergeEntityMetadata(canonical json.RawMessage, aliases ...json.RawMessage) (json.RawMessage, error) {
+	var dest map[string]interface{}
+	if len(canonical) > 0 {
+		if err := json.Unmarshal(canonical, &dest); err != nil {
+			return nil, fmt.Errorf("unmarshaling canonical metadata: %w", err)
+		}
+	}
+	if dest == nil {
+		dest = make(map[string]interface{})
+	}
+
+	for _, a := range aliases {
+		if len(a) == 0 {
+			continue
+		}
+		var src map[string]interface{}
+		if err := json.Unmarshal(a, &src); err != nil {
+			return nil, fmt.Errorf("unmarshaling alias metadata: %w", err)
+		}
+		mergeMaps(dest, src)
+	}
+
+	return json.Marshal(dest)
+}
+
+func mergeMaps(dest, src map[string]interface{}) {
+	for k, v := range src {
+		if existing, ok := dest[k]; ok {
+			destMap, destIsMap := existing.(map[string]interface{})
+			srcMap, srcIsMap := v.(map[string]interface{})
+			if destIsMap && srcIsMap {
+				mergeMaps(destMap, srcMap)
+			}
+			// if types differ or not both maps, dest (canonical) wins
+		} else {
+			dest[k] = v
+		}
+	}
 }
