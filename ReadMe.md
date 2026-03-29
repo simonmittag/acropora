@@ -91,9 +91,14 @@ Once the ontology is seeded, use a `Session` to interact with your data.
 session := db.NewSession(version)
 
 // Insert Entities
-person, _ := session.InsertEntity(ctx, acropora.Entity{
+john, _ := session.InsertEntity(ctx, acropora.Entity{
     EntityDefinition: acropora.EntityDefinition{Type: "Person"},
     RawName: "John Doe",
+})
+
+jane, _ := session.InsertEntity(ctx, acropora.Entity{
+    EntityDefinition: acropora.EntityDefinition{Type: "Person"},
+    RawName: "Jane Smith",
 })
 
 company, _ := session.InsertEntity(ctx, acropora.Entity{
@@ -101,8 +106,7 @@ company, _ := session.InsertEntity(ctx, acropora.Entity{
     RawName: "Acme Corp",
 })
 
-// Create a Triple (Subject - Predicate - Object)
-// Predicates defined in the ontology are available during runtime
+// Create Triples (Subject - Predicate - Object)
 predicate, _ := session.InsertPredicate(ctx, acropora.Predicate{
     PredicateDefinition: acropora.PredicateDefinition{
         Type:      "works_at",
@@ -110,10 +114,20 @@ predicate, _ := session.InsertPredicate(ctx, acropora.Predicate{
     },
 })
 
-triple, err := session.InsertTriple(ctx, acropora.Triple{
-    SubjectEntityID: person.ID,
+session.InsertTriple(ctx, acropora.Triple{
+    SubjectEntityID: john.ID,
     PredicateID:     predicate.ID,
     ObjectEntityID:  company.ID,
 })
+
+session.InsertTriple(ctx, acropora.Triple{
+    SubjectEntityID: jane.ID,
+    PredicateID:     predicate.ID,
+    ObjectEntityID:  company.ID,
+})
+
+// Get Entity Neighbours (one-hop relationships)
+// Acme Corp will have two incoming 'works_at' neighbours: John and Jane.
+neighbours, _ := session.GetEntityNeighbours(ctx, company.ID)
 ```
 
