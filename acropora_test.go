@@ -212,6 +212,35 @@ func TestSession(t *testing.T) {
 		assert.Contains(t, err.Error(), "not allowed by ontology")
 	})
 
+	t.Run("Triple insert with metadata", func(t *testing.T) {
+		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice Metadata"})
+		require.NoError(t, err)
+		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "ACME Metadata"})
+		require.NoError(t, err)
+
+		from := time.Now().Truncate(time.Second)
+		p, err := session.InsertPredicate(ctx, Predicate{
+			PredicateDefinition: PredicateDefinition{
+				Type:      "works_at",
+				ValidFrom: from,
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, p.ValidFrom.Equal(from))
+
+		triple, err := session.InsertTriple(ctx, Triple{
+			SubjectEntityID: person.ID,
+			PredicateID:     p.ID,
+			ObjectEntityID:  company.ID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, p.ID, triple.PredicateID)
+
+		fetchedP, err := session.GetPredicateByID(ctx, p.ID)
+		require.NoError(t, err)
+		assert.True(t, fetchedP.ValidFrom.Equal(from))
+	})
+
 	t.Run("TripleDefinition insert and read", func(t *testing.T) {
 		// Create entities and predicate
 		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice"})

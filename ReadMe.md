@@ -103,9 +103,16 @@ company, _ := session.InsertEntity(ctx, acropora.Entity{
 
 // Create a Triple (Subject - Predicate - Object)
 // Predicates defined in the ontology are available during runtime
+predicate, _ := session.InsertPredicate(ctx, acropora.Predicate{
+    PredicateDefinition: acropora.PredicateDefinition{
+        Type:      "works_at",
+        ValidFrom: time.Now(),
+    },
+})
+
 triple, err := session.InsertTriple(ctx, acropora.Triple{
     SubjectEntityID: person.ID,
-    PredicateID:     "works_at",
+    PredicateID:     predicate.ID,
     ObjectEntityID:  company.ID,
 })
 ```
