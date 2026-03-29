@@ -1,0 +1,28 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: acropora
+    skip: true
+
+# archives:
+#   - id: acropora-archive
+#     skip: true
+
+source:
+  enabled: true
+  name_template: '{{ .ProjectName }}_{{ .Version }}_source'
+
+checksum:
+  name_template: 'checksums.txt'
+
+release:
+  github:
+    owner: simonmittag
+    name: acropora
+  draft: true
+  prerelease: auto
+  mode: replace

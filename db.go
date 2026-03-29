@@ -9,6 +9,10 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
+// Version is the current version of the acropora library.
+// It is injected at build time via ldflags.
+var Version = "dev"
+
 //go:embed migrations/*.sql
 var migrations embed.FS
 

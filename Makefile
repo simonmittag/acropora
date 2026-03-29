@@ -4,6 +4,10 @@
 build:
 	go build ./...
 
+# Release with goreleaser (dry run)
+release-dry:
+	goreleaser release --snapshot --clean
+
 # Run all tests
 test:
 	go clean --testcache && go test -v ./...
