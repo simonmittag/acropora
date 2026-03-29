@@ -270,6 +270,13 @@ func TestSession(t *testing.T) {
 		res5, err := session.ResolveOrInsertPredicate(ctx, p5)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"special": "data"}`, string(res5.Metadata))
+
+		// 7. Different metadata should NOT reuse
+		p6 := p5
+		p6.Metadata = json.RawMessage(`{"special": "other"}`)
+		res6, err := session.ResolveOrInsertPredicate(ctx, p6)
+		require.NoError(t, err)
+		assert.NotEqual(t, res5.ID, res6.ID, "Should create new predicate for different metadata")
 	})
 
 	t.Run("Triple insert with metadata", func(t *testing.T) {

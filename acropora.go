@@ -254,7 +254,13 @@ func computePredicateDedupHash(p Predicate) string {
 	if !p.ValidTo.IsZero() {
 		toStr = p.ValidTo.UTC().Format(time.RFC3339)
 	}
-	data := fmt.Sprintf("%s|%s|%s|%s", p.OntologyVersionID, p.Type, fromStr, toStr)
+
+	meta := string(p.Metadata)
+	if meta == "" {
+		meta = "{}"
+	}
+
+	data := fmt.Sprintf("%s|%s|%s|%s|%s", p.OntologyVersionID, p.Type, fromStr, toStr, meta)
 	h := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(h[:])
 }
