@@ -2,8 +2,6 @@
   <img src="images/acropora.svg" alt="Acropora Logo">
 </p>
 
-# Acropora
-
 [![Go Reference](https://pkg.go.dev/badge/github.com/simonmittag/acropora.svg)](https://pkg.go.dev/github.com/simonmittag/acropora)
 [![Go Report Card](https://goreportcard.com/badge/github.com/simonmittag/acropora)](https://goreportcard.com/report/github.com/simonmittag/acropora)
 
