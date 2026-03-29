@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -26,11 +28,41 @@ func (d *DB) NewSession(version OntologyVersion) *Session {
 	}
 }
 
+// normalizeCanonicalName helper for entity-name normalization.
+func normalizeCanonicalName(name string) string {
+	// 1. Remove non-printable / control characters
+	var b strings.Builder
+	for _, r := range name {
+		if unicode.IsPrint(r) && r != 0 {
+			b.WriteRune(r)
+		}
+	}
+	s := b.String()
+
+	// 2. Lowercase
+	s = strings.ToLower(s)
+
+	// 3. Trim leading/trailing whitespace
+	s = strings.TrimSpace(s)
+
+	// 4. Collapse repeated internal whitespace to single spaces
+	fields := strings.Fields(s)
+	return strings.Join(fields, " ")
+}
+
 // InsertEntity inserts a new entity into the runtime.
 func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, error) {
 	if entity.Type == "" {
 		return Entity{}, errors.New("entity type cannot be empty")
 	}
+
+	trimmedRaw := strings.TrimSpace(entity.RawName)
+	if trimmedRaw == "" {
+		return Entity{}, errors.New("entity raw name cannot be empty")
+	}
+
+	// Compute CanonicalName internally
+	entity.CanonicalName = normalizeCanonicalName(entity.RawName)
 
 	// Validate against ontology
 	var exists bool
@@ -54,10 +86,10 @@ func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, erro
 
 	now := time.Now()
 	err = s.db.sqlDB.QueryRowContext(ctx,
-		`INSERT INTO entities (id, ontology_version_id, type, metadata, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO entities (id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING created_at, updated_at`,
-		entity.ID, entity.OntologyVersionID, entity.Type, entity.Metadata, now, now).Scan(&entity.CreatedAt, &entity.UpdatedAt)
+		entity.ID, entity.OntologyVersionID, entity.Type, entity.RawName, entity.CanonicalName, entity.Metadata, now, now).Scan(&entity.CreatedAt, &entity.UpdatedAt)
 	if err != nil {
 		return Entity{}, fmt.Errorf("inserting entity: %w", err)
 	}
@@ -69,14 +101,46 @@ func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, erro
 func (s *Session) GetEntityByID(ctx context.Context, id string) (Entity, error) {
 	var e Entity
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT id, ontology_version_id, type, metadata, created_at, updated_at FROM entities WHERE id = $1 AND ontology_version_id = $2",
-		id, s.version.ID).Scan(&e.ID, &e.OntologyVersionID, &e.Type, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
+		"SELECT id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at FROM entities WHERE id = $1 AND ontology_version_id = $2",
+		id, s.version.ID).Scan(&e.ID, &e.OntologyVersionID, &e.Type, &e.RawName, &e.CanonicalName, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Entity{}, fmt.Errorf("entity %s not found in session ontology version", id)
 		}
 		return Entity{}, fmt.Errorf("fetching entity: %w", err)
 	}
+	return e, nil
+}
+
+// GetEntityByRawName fetches an entity by its raw name, applying conservative canonicalization and anti-alias resolution.
+func (s *Session) GetEntityByRawName(ctx context.Context, rawName string) (Entity, error) {
+	if strings.TrimSpace(rawName) == "" {
+		return Entity{}, errors.New("raw name cannot be empty")
+	}
+
+	canonicalName := normalizeCanonicalName(rawName)
+
+	var e Entity
+	err := s.db.sqlDB.QueryRowContext(ctx,
+		"SELECT id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at FROM entities WHERE canonical_name = $1 AND ontology_version_id = $2",
+		canonicalName, s.version.ID).Scan(&e.ID, &e.OntologyVersionID, &e.Type, &e.RawName, &e.CanonicalName, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Entity{}, fmt.Errorf("entity %q not found", rawName)
+		}
+		return Entity{}, fmt.Errorf("fetching entity by raw name: %w", err)
+	}
+
+	// Internal anti-alias resolution
+	canonicalID, err := s.GetCanonicalEntityID(ctx, e.ID)
+	if err != nil {
+		return Entity{}, fmt.Errorf("resolving entity alias: %w", err)
+	}
+
+	if canonicalID != e.ID {
+		return s.GetEntityByID(ctx, canonicalID)
+	}
+
 	return e, nil
 }
 

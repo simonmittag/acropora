@@ -4,9 +4,12 @@ CREATE TABLE entities (
     id TEXT PRIMARY KEY,
     ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id),
     type TEXT NOT NULL,
+    raw_name TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (ontology_version_id, canonical_name)
 );
 
 CREATE INDEX idx_entities_ontology_version_id ON entities(ontology_version_id);

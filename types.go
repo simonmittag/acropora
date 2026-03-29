@@ -55,6 +55,8 @@ type OntologyVersion struct {
 type Entity struct {
 	Persistable
 	EntityDefinition
+	RawName       string
+	CanonicalName string
 }
 
 // Predicate represents a persisted predicate (either Ontology or Runtime).

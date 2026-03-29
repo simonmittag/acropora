@@ -53,17 +53,22 @@ func TestSession(t *testing.T) {
 				Type:     "Person",
 				Metadata: json.RawMessage(`{"age": 30}`),
 			},
+			RawName: "  John   Doe  ",
 		}
 		inserted, err := session.InsertEntity(ctx, e)
 		require.NoError(t, err)
 		assert.NotEmpty(t, inserted.ID)
 		assert.Equal(t, version.ID, inserted.OntologyVersionID)
 		assert.Equal(t, "Person", inserted.Type)
+		assert.Equal(t, "  John   Doe  ", inserted.RawName)
+		assert.Equal(t, "john doe", inserted.CanonicalName)
 
 		fetched, err := session.GetEntityByID(ctx, inserted.ID)
 		require.NoError(t, err)
 		assert.Equal(t, inserted.ID, fetched.ID)
 		assert.Equal(t, inserted.Type, fetched.Type)
+		assert.Equal(t, inserted.RawName, fetched.RawName)
+		assert.Equal(t, inserted.CanonicalName, fetched.CanonicalName)
 	})
 
 	t.Run("EntityDefinition validation failure", func(t *testing.T) {
@@ -71,10 +76,111 @@ func TestSession(t *testing.T) {
 			EntityDefinition: EntityDefinition{
 				Type: "InvalidEntity",
 			},
+			RawName: "Some Name",
 		}
 		_, err := session.InsertEntity(ctx, e)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not allowed by ontology")
+	})
+
+	t.Run("Conservative canonicalization", func(t *testing.T) {
+		tests := []struct {
+			input    string
+			expected string
+			name     string
+		}{
+			{"  Leading Trailing  ", "leading trailing", "trim whitespace"},
+			{"Multiple    Spaces", "multiple spaces", "collapse whitespace"},
+			{"Mixed CASE", "mixed case", "lowercase"},
+			{"Pty Ltd", "pty ltd", "preserve legal suffixes"},
+			{"Special Char", "special char", "remove non-printable"},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				e := Entity{
+					EntityDefinition: EntityDefinition{Type: "Person"},
+					RawName:          tc.input,
+				}
+				inserted, err := session.InsertEntity(ctx, e)
+				require.NoError(t, err)
+				assert.Equal(t, tc.expected, inserted.CanonicalName)
+			})
+		}
+	})
+
+	t.Run("Uniqueness", func(t *testing.T) {
+		e1 := Entity{
+			EntityDefinition: EntityDefinition{Type: "Person"},
+			RawName:          "Unique Name",
+		}
+		_, err := session.InsertEntity(ctx, e1)
+		require.NoError(t, err)
+
+		e2 := Entity{
+			EntityDefinition: EntityDefinition{Type: "Person"},
+			RawName:          "unique name", // Different raw, same canonical
+		}
+		_, err = session.InsertEntity(ctx, e2)
+		assert.Error(t, err, "Should fail due to unique constraint on canonical name")
+
+		// Same canonical name in different ontology version should pass
+		def2 := Definition{
+			Entities: []EntityDefinition{{Type: "Person"}},
+		}
+		version2, err := db.SeedOntology(ctx, sqlDB, def2, SeedOptions{Slug: "v2"})
+		require.NoError(t, err)
+		session2 := db.NewSession(version2)
+
+		_, err = session2.InsertEntity(ctx, e1)
+		assert.NoError(t, err, "Should allow same canonical name in different ontology version")
+	})
+
+	t.Run("Lookup by raw name", func(t *testing.T) {
+		raw := "  Lookup   Me  "
+		e := Entity{
+			EntityDefinition: EntityDefinition{Type: "Person"},
+			RawName:          raw,
+		}
+		inserted, err := session.InsertEntity(ctx, e)
+		require.NoError(t, err)
+
+		// Exact match
+		fetched, err := session.GetEntityByRawName(ctx, raw)
+		require.NoError(t, err)
+		assert.Equal(t, inserted.ID, fetched.ID)
+
+		// Case/spacing variant
+		fetched, err = session.GetEntityByRawName(ctx, "lookup me")
+		require.NoError(t, err)
+		assert.Equal(t, inserted.ID, fetched.ID)
+
+		fetched, err = session.GetEntityByRawName(ctx, "  LOOKUP me  ")
+		require.NoError(t, err)
+		assert.Equal(t, inserted.ID, fetched.ID)
+	})
+
+	t.Run("Alias-aware lookup", func(t *testing.T) {
+		canonical, err := session.InsertEntity(ctx, Entity{
+			EntityDefinition: EntityDefinition{Type: "Company"},
+			RawName:          "Canonical Corp",
+		})
+		require.NoError(t, err)
+
+		alias, err := session.InsertEntity(ctx, Entity{
+			EntityDefinition: EntityDefinition{Type: "Company"},
+			RawName:          "Alias Inc",
+		})
+		require.NoError(t, err)
+
+		_, err = session.LinkEntityAlias(ctx, alias.ID, canonical.ID, nil)
+		require.NoError(t, err)
+
+		// Lookup by alias raw name should return canonical entity
+		fetched, err := session.GetEntityByRawName(ctx, "Alias Inc")
+		require.NoError(t, err)
+		assert.Equal(t, canonical.ID, fetched.ID)
+		assert.Equal(t, "Canonical Corp", fetched.RawName)
 	})
 
 	t.Run("PredicateDefinition insert and read", func(t *testing.T) {
@@ -108,9 +214,9 @@ func TestSession(t *testing.T) {
 
 	t.Run("TripleDefinition insert and read", func(t *testing.T) {
 		// Create entities and predicate
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice"})
 		require.NoError(t, err)
-		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}})
+		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "ACME"})
 		require.NoError(t, err)
 		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
@@ -137,7 +243,7 @@ func TestSession(t *testing.T) {
 	})
 
 	t.Run("TripleDefinition validation failure - semantic", func(t *testing.T) {
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob"})
 		require.NoError(t, err)
 		// Try to make Person works_at Person (not allowed by ontology)
 		triple := Triple{
@@ -159,11 +265,11 @@ func TestSession(t *testing.T) {
 
 	t.Run("Entity Aliasing", func(t *testing.T) {
 		// Setup
-		a, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		a, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "A"})
 		require.NoError(t, err)
-		b, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		b, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B"})
 		require.NoError(t, err)
-		c, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}})
+		c, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "C"})
 		require.NoError(t, err)
 		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
@@ -195,9 +301,9 @@ func TestSession(t *testing.T) {
 		// To test this we need a triple that WAS on B before it was linked, OR just insert it bypass canonicalization if we want to be sure.
 		// Actually, let's just use the Session to insert it BEFORE linking.
 
-		d, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}})
+		d, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "D"})
 		require.NoError(t, err)
-		b2, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		b2, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B2"})
 		require.NoError(t, err)
 		_, err = session.InsertTriple(ctx, Triple{SubjectEntityID: b2.ID, PredicateID: worksAt.ID, ObjectEntityID: d.ID})
 		require.NoError(t, err)
@@ -221,7 +327,7 @@ func TestSession(t *testing.T) {
 		assert.Equal(t, outgoingA, outgoingB2)
 
 		// Test C: New writes via alias canonicalize
-		e, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}})
+		e, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "E"})
 		require.NoError(t, err)
 		tr, err := session.InsertTriple(ctx, Triple{SubjectEntityID: b.ID, PredicateID: worksAt.ID, ObjectEntityID: e.ID})
 		require.NoError(t, err)
@@ -229,11 +335,11 @@ func TestSession(t *testing.T) {
 
 		// Test D: Child alias reparenting
 		// D -> B, then B -> A
-		entD, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		entD, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "D_ent"})
 		require.NoError(t, err)
-		entB, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		entB, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B_ent"})
 		require.NoError(t, err)
-		entA, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		entA, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "A_ent"})
 		require.NoError(t, err)
 
 		_, err = session.LinkEntityAlias(ctx, entD.ID, entB.ID, nil)
@@ -272,10 +378,10 @@ func TestSession(t *testing.T) {
 			},
 		}
 
-		version2, err := db.SeedOntology(ctx, sqlDB, def2, SeedOptions{Slug: "v2"})
+		version2, err := db.SeedOntology(ctx, sqlDB, def2, SeedOptions{Slug: "v2-aliasing"})
 		require.NoError(t, err)
 		session2 := db.NewSession(version2)
-		entV2, err := session2.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}})
+		entV2, err := session2.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "V2_Person"})
 		require.NoError(t, err)
 
 		_, err = session.LinkEntityAlias(ctx, entV2.ID, a.ID, nil)
