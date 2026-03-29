@@ -1,5 +1,5 @@
 <p align="left">
-  <img src="images/acropora.svg" alt="Acropora Logo">
+  <img src="images/acropora_sm.svg" alt="Acropora Logo">
 </p>
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/simonmittag/acropora.svg)](https://pkg.go.dev/github.com/simonmittag/acropora)
