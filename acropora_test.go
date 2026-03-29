@@ -440,4 +440,79 @@ func TestSession(t *testing.T) {
 
 		assert.Equal(t, []interface{}{"a"}, result["tags"]) // Arrays are not merged, canonical wins
 	})
+
+	t.Run("ResolveOrInsertEntity", func(t *testing.T) {
+		// Ensure a clean slate
+		_, _ = sqlDB.ExecContext(ctx, "TRUNCATE TABLE triples, predicates, entities, entity_aliases, ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
+
+		// 1. Seed ontology
+		entitiesDef := []EntityDefinition{
+			{Type: "Company"},
+			{Type: "Person"},
+		}
+		def := Definition{
+			Entities: entitiesDef,
+		}
+
+		version, err := db.SeedOntology(ctx, sqlDB, def, SeedOptions{Slug: "v-resolve"})
+		require.NoError(t, err)
+
+		session := db.NewSession(version)
+
+		// Test A: Insert new entity
+		e := Entity{
+			EntityDefinition: EntityDefinition{Type: "Company"},
+			RawName:          "Apple Inc.",
+		}
+		resolved, err := session.ResolveOrInsertEntity(ctx, e)
+		require.NoError(t, err)
+		assert.NotEmpty(t, resolved.ID)
+		assert.Equal(t, "Apple Inc.", resolved.RawName)
+		assert.Equal(t, "apple inc.", resolved.CanonicalName)
+
+		// Test B: Resolve existing entity by canonical name
+		e2 := Entity{
+			EntityDefinition: EntityDefinition{Type: "Company"},
+			RawName:          "  APPLE  INC.  ",
+		}
+		resolved2, err := session.ResolveOrInsertEntity(ctx, e2)
+		require.NoError(t, err)
+		assert.Equal(t, resolved.ID, resolved2.ID)
+		assert.Equal(t, "Apple Inc.", resolved2.RawName)
+
+		// Test C: Resolve through alias
+		e3 := Entity{
+			EntityDefinition: EntityDefinition{Type: "Company"},
+			RawName:          "Apple",
+		}
+		inserted3, err := session.InsertEntity(ctx, e3)
+		require.NoError(t, err)
+
+		// Link "Apple" as an alias of "Apple Inc."
+		_, err = session.LinkEntityAlias(ctx, inserted3.ID, resolved.ID, nil)
+		require.NoError(t, err)
+
+		// Now ResolveOrInsert "Apple" should return "Apple Inc."
+		eResolve := Entity{
+			EntityDefinition: EntityDefinition{Type: "Company"},
+			RawName:          "Apple",
+		}
+		resolvedAlias, err := session.ResolveOrInsertEntity(ctx, eResolve)
+		require.NoError(t, err)
+		assert.Equal(t, resolved.ID, resolvedAlias.ID)
+		assert.Equal(t, "Apple Inc.", resolvedAlias.RawName)
+
+		// Test D: Different type with same name (if allowed by ontology, but here it's still same canonical name)
+		// Our current implementation of GetEntityByRawName doesn't care about type, it just finds the entity by name.
+		// If we wanted to support same name for different types, we'd need to change the schema/logic.
+		// For now, it will resolve to the existing one regardless of type in the input.
+		ePerson := Entity{
+			EntityDefinition: EntityDefinition{Type: "Person"},
+			RawName:          "Apple Inc.",
+		}
+		resolvedPerson, err := session.ResolveOrInsertEntity(ctx, ePerson)
+		require.NoError(t, err)
+		assert.Equal(t, resolved.ID, resolvedPerson.ID)
+		assert.Equal(t, "Company", resolvedPerson.Type) // Still "Company" as it's the existing entity
+	})
 }

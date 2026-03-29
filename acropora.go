@@ -97,6 +97,37 @@ func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, erro
 	return entity, nil
 }
 
+// ResolveOrInsertEntity attempts to find an existing entity by normalizing the name and checking both
+// canonical names and known aliases. If not found, it creates a new entity.
+func (s *Session) ResolveOrInsertEntity(ctx context.Context, entity Entity) (Entity, error) {
+	if entity.Type == "" {
+		return Entity{}, errors.New("entity type cannot be empty")
+	}
+
+	trimmedRaw := strings.TrimSpace(entity.RawName)
+	if trimmedRaw == "" {
+		return Entity{}, errors.New("entity raw name cannot be empty")
+	}
+
+	// 1. Try to find existing entity by name (handles canonical name and aliases)
+	found, err := s.GetEntityByRawName(ctx, entity.RawName)
+	if err == nil {
+		// Found existing entity. Ensure types match if requested.
+		// If the existing entity has a different type, we could either return an error,
+		// or just return the found entity. The requirements say "takes a name and an optional entity type".
+		// In our Entity struct, Type is required for InsertEntity.
+		return found, nil
+	}
+
+	// If the error is anything other than "not found", return it.
+	if !strings.Contains(err.Error(), "not found") {
+		return Entity{}, fmt.Errorf("resolving entity: %w", err)
+	}
+
+	// 2. Not found, so insert new entity
+	return s.InsertEntity(ctx, entity)
+}
+
 // GetEntityByID fetches an entity by its ID, scoped to the session's ontology version.
 func (s *Session) GetEntityByID(ctx context.Context, id string) (Entity, error) {
 	var e Entity
