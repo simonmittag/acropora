@@ -23,9 +23,8 @@ type EntityDefinition struct {
 
 // PredicateDefinition represents the core properties of a predicate.
 type PredicateDefinition struct {
-	Type      string
-	ValidFrom time.Time
-	ValidTo   time.Time
+	Type     string
+	Metadata json.RawMessage
 }
 
 // TripleDefinition represents the core properties of a triple definition.
@@ -63,6 +62,9 @@ type Entity struct {
 type Predicate struct {
 	Persistable
 	PredicateDefinition
+	ValidFrom time.Time
+	ValidTo   time.Time
+	Metadata  json.RawMessage
 }
 
 // Triple represents a persisted triple (either Ontology or Runtime).

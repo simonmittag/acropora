@@ -196,9 +196,13 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 	for i := range def.Predicates {
 		pDef := &def.Predicates[i]
 		id := uuid.New().String()
+		metadata := pDef.Metadata
+		if metadata == nil {
+			metadata = json.RawMessage("{}")
+		}
 		_, err = tx.ExecContext(ctx,
-			"INSERT INTO ontology_predicates (id, ontology_version_id, type, valid_from, valid_to) VALUES ($1, $2, $3, $4, $5)",
-			id, versionID, pDef.Type, pDef.ValidFrom, pDef.ValidTo)
+			"INSERT INTO ontology_predicates (id, ontology_version_id, type, metadata) VALUES ($1, $2, $3, $4)",
+			id, versionID, pDef.Type, metadata)
 		if err != nil {
 			return OntologyVersion{}, fmt.Errorf("failed to insert predicate %s: %w", pDef.Type, err)
 		}

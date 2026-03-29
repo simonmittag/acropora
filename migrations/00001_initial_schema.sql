@@ -24,8 +24,7 @@ CREATE TABLE ontology_predicates (
     id TEXT PRIMARY KEY,
     ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id) ON DELETE CASCADE,
     type TEXT NOT NULL,
-    valid_from TIMESTAMPTZ NULL,
-    valid_to TIMESTAMPTZ NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

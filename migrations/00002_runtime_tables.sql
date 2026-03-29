@@ -19,14 +19,19 @@ CREATE TABLE predicates (
     id TEXT PRIMARY KEY,
     ontology_version_id TEXT NOT NULL REFERENCES ontology_versions(id),
     type TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     valid_from TIMESTAMPTZ NULL,
     valid_to TIMESTAMPTZ NULL,
+    dedup_hash TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (ontology_version_id, dedup_hash)
 );
 
 CREATE INDEX idx_predicates_ontology_version_id ON predicates(ontology_version_id);
-CREATE INDEX idx_predicates_ontology_version_id_id ON predicates(ontology_version_id, id);
+CREATE INDEX idx_predicates_type ON predicates(type);
+CREATE INDEX idx_predicates_ontology_version_id_type ON predicates(ontology_version_id, type);
+CREATE INDEX idx_predicates_dedup_hash ON predicates(dedup_hash);
 
 CREATE TABLE triples (
     id TEXT PRIMARY KEY,
