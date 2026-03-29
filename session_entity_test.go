@@ -2,51 +2,15 @@ package acropora
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSession(t *testing.T) {
-	ctx := context.Background()
-	sqlDB, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	db, err := New(ctx, sqlDB)
-	require.NoError(t, err)
-
-	// Ensure a clean slate for TestSession
-	_, _ = sqlDB.ExecContext(ctx, "TRUNCATE TABLE triples, predicates, entities, entity_aliases, ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
-
-	// 1. Seed ontology
-	entities := []EntityDefinition{
-		{Type: "Person"},
-		{Type: "Company"},
-	}
-	predicates := []PredicateDefinition{
-		{Type: "works_at"},
-	}
-	def := Definition{
-		Entities:   entities,
-		Predicates: predicates,
-		Triples: []TripleDefinition{
-			{
-				Subject:   &entities[0],
-				Predicate: &predicates[0],
-				Object:    &entities[1],
-			},
-		},
-	}
-
-	version, err := db.SeedOntology(ctx, sqlDB, def, SeedOptions{Slug: "v1"})
-	require.NoError(t, err)
-
-	// 2. Create Session
-	session := db.NewSession(version)
-
+func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sqlDB *sql.DB, version *OntologyVersion) {
 	t.Run("EntityDefinition insert and read", func(t *testing.T) {
 		e := Entity{
 			EntityDefinition: EntityDefinition{
@@ -183,182 +147,6 @@ func TestSession(t *testing.T) {
 		assert.Equal(t, "Canonical Corp", fetched.RawName)
 	})
 
-	t.Run("Predicate insert and read", func(t *testing.T) {
-		now := time.Now().Truncate(time.Second)
-		p := Predicate{
-			PredicateDefinition: PredicateDefinition{
-				Type:     "works_at",
-				Metadata: json.RawMessage(`{"ontology_meta": "foo"}`),
-			},
-			ValidFrom: now,
-			Metadata:  json.RawMessage(`{"runtime_meta": "bar"}`),
-		}
-		inserted, err := session.InsertPredicate(ctx, p)
-		require.NoError(t, err)
-		assert.NotEmpty(t, inserted.ID)
-		assert.Equal(t, version.ID, inserted.OntologyVersionID)
-		assert.Equal(t, "works_at", inserted.Type)
-		assert.True(t, inserted.ValidFrom.Equal(now))
-
-		fetched, err := session.GetPredicateByID(ctx, inserted.ID)
-		require.NoError(t, err)
-		assert.Equal(t, inserted.ID, fetched.ID)
-		assert.Equal(t, "works_at", fetched.Type)
-		assert.JSONEq(t, `{"runtime_meta": "bar"}`, string(fetched.Metadata))
-	})
-
-	t.Run("Predicate validation failure", func(t *testing.T) {
-		p := Predicate{
-			PredicateDefinition: PredicateDefinition{
-				Type: "invalid_predicate",
-			},
-		}
-		_, err := session.InsertPredicate(ctx, p)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not allowed by ontology")
-	})
-
-	t.Run("ResolveOrInsertPredicate", func(t *testing.T) {
-		now := time.Now().UTC().Truncate(time.Minute)
-		p1 := Predicate{
-			PredicateDefinition: PredicateDefinition{
-				Type: "works_at",
-			},
-			ValidFrom: now,
-			Metadata:  json.RawMessage(`{"m": 1}`),
-		}
-
-		// 1. Valid insert
-		res1, err := session.ResolveOrInsertPredicate(ctx, p1)
-		require.NoError(t, err)
-		assert.NotEmpty(t, res1.ID)
-
-		// 2. Reuse existing
-		res2, err := session.ResolveOrInsertPredicate(ctx, p1)
-		require.NoError(t, err)
-		assert.Equal(t, res1.ID, res2.ID, "Should reuse existing predicate")
-
-		// 3. Different validity window
-		p2 := p1
-		p2.ValidTo = now.Add(time.Hour)
-		res3, err := session.ResolveOrInsertPredicate(ctx, p2)
-		require.NoError(t, err)
-		assert.NotEqual(t, res1.ID, res3.ID, "Should create new predicate for different validity window")
-
-		// 4. Ontology validation failure
-		p3 := Predicate{PredicateDefinition: PredicateDefinition{Type: "non_existent"}}
-		_, err = session.ResolveOrInsertPredicate(ctx, p3)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not allowed by ontology")
-
-		// 5. Invalid temporal range
-		p4 := Predicate{
-			PredicateDefinition: PredicateDefinition{Type: "works_at"},
-			ValidFrom:           now.Add(time.Hour),
-			ValidTo:             now,
-		}
-		_, err = session.ResolveOrInsertPredicate(ctx, p4)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "ValidTo cannot be before ValidFrom")
-
-		// 6. Metadata persistence
-		p5 := Predicate{
-			PredicateDefinition: PredicateDefinition{Type: "works_at"},
-			ValidFrom:           now.Add(2 * time.Hour),
-			Metadata:            json.RawMessage(`{"special": "data"}`),
-		}
-		res5, err := session.ResolveOrInsertPredicate(ctx, p5)
-		require.NoError(t, err)
-		assert.JSONEq(t, `{"special": "data"}`, string(res5.Metadata))
-
-		// 7. Different metadata should NOT reuse
-		p6 := p5
-		p6.Metadata = json.RawMessage(`{"special": "other"}`)
-		res6, err := session.ResolveOrInsertPredicate(ctx, p6)
-		require.NoError(t, err)
-		assert.NotEqual(t, res5.ID, res6.ID, "Should create new predicate for different metadata")
-	})
-
-	t.Run("Triple insert with metadata", func(t *testing.T) {
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice Metadata"})
-		require.NoError(t, err)
-		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "ACME Metadata"})
-		require.NoError(t, err)
-
-		from := time.Now().Truncate(time.Second)
-		p, err := session.InsertPredicate(ctx, Predicate{
-			PredicateDefinition: PredicateDefinition{
-				Type: "works_at",
-			},
-			ValidFrom: from,
-		})
-		require.NoError(t, err)
-		assert.True(t, p.ValidFrom.Equal(from))
-
-		triple, err := session.InsertTriple(ctx, Triple{
-			SubjectEntityID: person.ID,
-			PredicateID:     p.ID,
-			ObjectEntityID:  company.ID,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, p.ID, triple.PredicateID)
-
-		fetchedP, err := session.GetPredicateByID(ctx, p.ID)
-		require.NoError(t, err)
-		assert.True(t, fetchedP.ValidFrom.Equal(from))
-	})
-
-	t.Run("TripleDefinition insert and read", func(t *testing.T) {
-		// Create entities and predicate
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice"})
-		require.NoError(t, err)
-		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "ACME"})
-		require.NoError(t, err)
-		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
-		require.NoError(t, err)
-
-		triple := Triple{
-			SubjectEntityID: person.ID,
-			PredicateID:     worksAt.ID,
-			ObjectEntityID:  company.ID,
-		}
-
-		inserted, err := session.InsertTriple(ctx, triple)
-		require.NoError(t, err)
-		assert.NotEmpty(t, inserted.ID)
-
-		fetched, err := session.GetTripleByID(ctx, inserted.ID)
-		require.NoError(t, err)
-		assert.Equal(t, inserted.ID, fetched.ID)
-
-		// Outgoing query
-		outgoing, err := session.GetOutgoingTriples(ctx, person.ID)
-		require.NoError(t, err)
-		assert.Len(t, outgoing, 1)
-		assert.Equal(t, inserted.ID, outgoing[0].ID)
-	})
-
-	t.Run("TripleDefinition validation failure - semantic", func(t *testing.T) {
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob"})
-		require.NoError(t, err)
-		// Try to make Person works_at Person (not allowed by ontology)
-		triple := Triple{
-			SubjectEntityID: person.ID,
-			PredicateID:     "non-existent-predicate", // non-existent predicate first
-			ObjectEntityID:  person.ID,
-		}
-		_, err = session.InsertTriple(ctx, triple)
-		assert.Error(t, err)
-
-		// Now with valid runtime rows but invalid semantic
-		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
-		require.NoError(t, err)
-		triple.PredicateID = worksAt.ID
-		_, err = session.InsertTriple(ctx, triple)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not allowed by ontology")
-	})
-
 	t.Run("Entity Aliasing", func(t *testing.T) {
 		// Setup
 		a, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "A"})
@@ -461,6 +249,10 @@ func TestSession(t *testing.T) {
 
 		// Test F: Cross-version rejection
 		// Create a slightly different definition to avoid hash collision
+		def := Definition{
+			Entities:   []EntityDefinition{{Type: "Person"}, {Type: "Company"}},
+			Predicates: []PredicateDefinition{{Type: "works_at"}},
+		}
 		def2 := Definition{
 			Entities:   append([]EntityDefinition{{Type: "Dummy"}}, def.Entities...),
 			Predicates: def.Predicates,
@@ -509,21 +301,12 @@ func TestSession(t *testing.T) {
 	})
 
 	t.Run("ResolveOrInsertEntity", func(t *testing.T) {
-		// Ensure a clean slate
-		_, _ = sqlDB.ExecContext(ctx, "TRUNCATE TABLE triples, predicates, entities, entity_aliases, ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
-
-		// 1. Seed ontology
-		entitiesDef := []EntityDefinition{
-			{Type: "Company"},
-			{Type: "Person"},
-		}
+		// Re-seed since previous tests might have truncated or we want a fresh start
 		def := Definition{
-			Entities: entitiesDef,
+			Entities: []EntityDefinition{{Type: "Company"}, {Type: "Person"}},
 		}
-
 		version, err := db.SeedOntology(ctx, sqlDB, def, SeedOptions{Slug: "v-resolve"})
 		require.NoError(t, err)
-
 		session := db.NewSession(version)
 
 		// Test A: Insert new entity
@@ -584,9 +367,6 @@ func TestSession(t *testing.T) {
 	})
 
 	t.Run("GetEntityNeighbours", func(t *testing.T) {
-		// Clean slate
-		_, _ = sqlDB.ExecContext(ctx, "TRUNCATE TABLE triples, predicates, entities, entity_aliases, ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
-
 		// 1. Seed ontology
 		def := Definition{
 			Entities: []EntityDefinition{
