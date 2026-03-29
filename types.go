@@ -43,6 +43,28 @@ type Definition struct {
 
 // --- Persisted Types ---
 
+// Direction represents the direction of a relationship.
+type Direction string
+
+const (
+	DirectionIncoming Direction = "incoming"
+	DirectionOutgoing Direction = "outgoing"
+)
+
+// Neighbour represents a flattened read model for a neighbouring entity.
+type Neighbour struct {
+	TripleID           string
+	Direction          Direction
+	PredicateType      string
+	PredicateMetadata  json.RawMessage
+	PredicateValidFrom time.Time
+	PredicateValidTo   time.Time
+	EntityID           string
+	EntityType         string
+	CanonicalName      string
+	Metadata           json.RawMessage
+}
+
 // OntologyVersion represents a specific version of the ontology.
 type OntologyVersion struct {
 	Persistable

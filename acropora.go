@@ -165,7 +165,7 @@ func (s *Session) GetEntityByRawName(ctx context.Context, rawName string) (Entit
 	}
 
 	// Internal anti-alias resolution
-	canonicalID, err := s.GetCanonicalEntityID(ctx, e.ID)
+	canonicalID, err := s.GetAntiAliasedEntityID(ctx, e.ID)
 	if err != nil {
 		return Entity{}, fmt.Errorf("resolving entity alias: %w", err)
 	}
@@ -353,11 +353,11 @@ func (s *Session) InsertTriple(ctx context.Context, triple Triple) (Triple, erro
 
 	// Canonicalize subject and object before validation and insert
 	var err error
-	triple.SubjectEntityID, err = s.GetCanonicalEntityID(ctx, triple.SubjectEntityID)
+	triple.SubjectEntityID, err = s.GetAntiAliasedEntityID(ctx, triple.SubjectEntityID)
 	if err != nil {
 		return Triple{}, fmt.Errorf("canonicalizing subject: %w", err)
 	}
-	triple.ObjectEntityID, err = s.GetCanonicalEntityID(ctx, triple.ObjectEntityID)
+	triple.ObjectEntityID, err = s.GetAntiAliasedEntityID(ctx, triple.ObjectEntityID)
 	if err != nil {
 		return Triple{}, fmt.Errorf("canonicalizing object: %w", err)
 	}
@@ -474,7 +474,7 @@ func (s *Session) GetOutgoingTriples(ctx context.Context, entityID string) ([]Tr
 		t.SubjectEntityID = canonicalID
 
 		// Normalize object
-		objCanonical, err := s.GetCanonicalEntityID(ctx, t.ObjectEntityID)
+		objCanonical, err := s.GetAntiAliasedEntityID(ctx, t.ObjectEntityID)
 		if err == nil {
 			t.ObjectEntityID = objCanonical
 		}
@@ -588,8 +588,8 @@ func (s *Session) LinkEntityAlias(ctx context.Context, aliasEntityID, canonicalE
 	return ea, nil
 }
 
-// GetCanonicalEntityID returns the canonical root ID for an entity.
-func (s *Session) GetCanonicalEntityID(ctx context.Context, entityID string) (string, error) {
+// GetAntiAliasedEntityID returns the canonical root ID for an entity.
+func (s *Session) GetAntiAliasedEntityID(ctx context.Context, entityID string) (string, error) {
 	var canonicalID string
 	err := s.db.sqlDB.QueryRowContext(ctx,
 		"SELECT canonical_entity_id FROM entity_aliases WHERE alias_entity_id = $1 AND ontology_version_id = $2",
@@ -619,7 +619,7 @@ func (s *Session) getCanonicalEntityIDTx(ctx context.Context, tx *sql.Tx, entity
 
 // GetAliasGroupEntityIDs returns all entity IDs in the alias group.
 func (s *Session) GetAliasGroupEntityIDs(ctx context.Context, entityID string) ([]string, string, error) {
-	canonicalID, err := s.GetCanonicalEntityID(ctx, entityID)
+	canonicalID, err := s.GetAntiAliasedEntityID(ctx, entityID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -667,6 +667,122 @@ func MergeEntityMetadata(canonical json.RawMessage, aliases ...json.RawMessage) 
 	}
 
 	return json.Marshal(dest)
+}
+
+// GetEntityNeighbours returns all one-hop neighbours of an entity, expanding across the alias group.
+func (s *Session) GetEntityNeighbours(ctx context.Context, entityID string) ([]Neighbour, error) {
+	// 1. Resolve input entity to canonical root
+	canonicalID, err := s.GetAntiAliasedEntityID(ctx, entityID)
+	if err != nil {
+		return nil, fmt.Errorf("resolving canonical entity ID: %w", err)
+	}
+
+	// Verify entity exists in this version
+	_, err = s.GetEntityByID(ctx, canonicalID)
+	if err != nil {
+		return nil, fmt.Errorf("fetching canonical entity: %w", err)
+	}
+
+	// 2. Expand alias group
+	groupIDs, _, err := s.GetAliasGroupEntityIDs(ctx, canonicalID)
+	if err != nil {
+		return nil, fmt.Errorf("expanding alias group: %w", err)
+	}
+
+	// 3. Query all runtime triples where subject or object is in the alias group
+	query := `
+		SELECT 
+			t.id AS triple_id,
+			t.subject_entity_id,
+			t.object_entity_id,
+			p.type AS predicate_type,
+			p.metadata AS predicate_metadata,
+			p.valid_from AS predicate_valid_from,
+			p.valid_to AS predicate_valid_to,
+			e.id AS neighbour_entity_id,
+			e.type AS neighbour_entity_type,
+			e.canonical_name AS neighbour_canonical_name,
+			e.metadata AS neighbour_metadata
+		FROM triples t
+		JOIN predicates p ON t.predicate_id = p.id
+		JOIN entities e ON (
+			(t.subject_entity_id = ANY($1) AND t.object_entity_id = e.id) OR
+			(t.object_entity_id = ANY($1) AND t.subject_entity_id = e.id)
+		)
+		WHERE t.ontology_version_id = $2
+	`
+
+	rows, err := s.db.sqlDB.QueryContext(ctx, query, pq.Array(groupIDs), s.version.ID)
+	if err != nil {
+		return nil, fmt.Errorf("querying neighbours: %w", err)
+	}
+	defer rows.Close()
+
+	var neighbours []Neighbour
+	groupMap := make(map[string]bool)
+	for _, id := range groupIDs {
+		groupMap[id] = true
+	}
+
+	for rows.Next() {
+		var (
+			tripleID, subjectID, objectID string
+			n                             Neighbour
+		)
+		err := rows.Scan(
+			&tripleID,
+			&subjectID,
+			&objectID,
+			&n.PredicateType,
+			&n.PredicateMetadata,
+			&n.PredicateValidFrom,
+			&n.PredicateValidTo,
+			&n.EntityID,
+			&n.EntityType,
+			&n.CanonicalName,
+			&n.Metadata,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning neighbour row: %w", err)
+		}
+
+		n.TripleID = tripleID
+
+		// Determine direction relative to queried alias group
+		isSubjectInGroup := groupMap[subjectID]
+		isObjectInGroup := groupMap[objectID]
+
+		if isSubjectInGroup && isObjectInGroup {
+			// Malformed or self-loop: if both are in group, we treat it as outgoing by convention
+			n.Direction = DirectionOutgoing
+		} else if isSubjectInGroup {
+			n.Direction = DirectionOutgoing
+		} else {
+			n.Direction = DirectionIncoming
+		}
+
+		// Normalize returned neighbour entity to canonical identity
+		canonicalNeighbourID, err := s.GetAntiAliasedEntityID(ctx, n.EntityID)
+		if err != nil {
+			return nil, fmt.Errorf("resolving canonical neighbour ID: %w", err)
+		}
+
+		if canonicalNeighbourID != n.EntityID {
+			// If it's different, we need to fetch the canonical entity's full details
+			canonicalNeighbour, err := s.GetEntityByID(ctx, canonicalNeighbourID)
+			if err != nil {
+				return nil, fmt.Errorf("fetching canonical neighbour entity: %w", err)
+			}
+			n.EntityID = canonicalNeighbour.ID
+			n.EntityType = canonicalNeighbour.Type
+			n.CanonicalName = canonicalNeighbour.CanonicalName
+			n.Metadata = canonicalNeighbour.Metadata
+		}
+
+		neighbours = append(neighbours, n)
+	}
+
+	return neighbours, nil
 }
 
 func mergeMaps(dest, src map[string]interface{}) {

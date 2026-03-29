@@ -374,11 +374,11 @@ func TestSession(t *testing.T) {
 		_, err = session.LinkEntityAlias(ctx, b.ID, a.ID, json.RawMessage(`{"source": "merger"}`))
 		require.NoError(t, err)
 
-		canonicalA, err := session.GetCanonicalEntityID(ctx, a.ID)
+		canonicalA, err := session.GetAntiAliasedEntityID(ctx, a.ID)
 		require.NoError(t, err)
 		assert.Equal(t, a.ID, canonicalA)
 
-		canonicalB, err := session.GetCanonicalEntityID(ctx, b.ID)
+		canonicalB, err := session.GetAntiAliasedEntityID(ctx, b.ID)
 		require.NoError(t, err)
 		assert.Equal(t, a.ID, canonicalB)
 
@@ -444,7 +444,7 @@ func TestSession(t *testing.T) {
 		require.NoError(t, err)
 
 		// Check entD now points to entA
-		canD, err := session.GetCanonicalEntityID(ctx, entD.ID)
+		canD, err := session.GetAntiAliasedEntityID(ctx, entD.ID)
 		require.NoError(t, err)
 		assert.Equal(t, entA.ID, canD)
 
@@ -581,5 +581,184 @@ func TestSession(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, resolved.ID, resolvedPerson.ID)
 		assert.Equal(t, "Company", resolvedPerson.Type) // Still "Company" as it's the existing entity
+	})
+
+	t.Run("GetEntityNeighbours", func(t *testing.T) {
+		// Clean slate
+		_, _ = sqlDB.ExecContext(ctx, "TRUNCATE TABLE triples, predicates, entities, entity_aliases, ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
+
+		// 1. Seed ontology
+		def := Definition{
+			Entities: []EntityDefinition{
+				{Type: "Person"},
+				{Type: "Company"},
+			},
+			Predicates: []PredicateDefinition{
+				{Type: "works_at"},
+				{Type: "knows"},
+			},
+		}
+		def.Triples = []TripleDefinition{
+			{Subject: &def.Entities[0], Predicate: &def.Predicates[0], Object: &def.Entities[1]}, // Person works_at Company
+			{Subject: &def.Entities[0], Predicate: &def.Predicates[1], Object: &def.Entities[0]}, // Person knows Person
+		}
+		version, err := db.SeedOntology(ctx, sqlDB, def, SeedOptions{Slug: "v-neighbours"})
+		require.NoError(t, err)
+		session := db.NewSession(version)
+
+		// 2. Setup Entities
+		alice, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice"})
+		bob, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob"})
+		apple, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Apple"})
+		google, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Google"})
+
+		// 3. Setup Aliases
+		// AliceAlias -> Alice
+		aliceAlias, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice Alias"})
+		_, err = session.LinkEntityAlias(ctx, aliceAlias.ID, alice.ID, nil)
+		require.NoError(t, err)
+
+		// 4. Setup Triples
+		pWorksAt, err := session.InsertPredicate(ctx, Predicate{Persistable: Persistable{OntologyVersionID: version.ID}, PredicateDefinition: PredicateDefinition{Type: "works_at"}})
+		require.NoError(t, err)
+		pKnows, err := session.InsertPredicate(ctx, Predicate{Persistable: Persistable{OntologyVersionID: version.ID}, PredicateDefinition: PredicateDefinition{Type: "knows"}})
+		require.NoError(t, err)
+
+		// Alice works_at Apple
+		t1, err := session.InsertTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: alice.ID, PredicateID: pWorksAt.ID, ObjectEntityID: apple.ID})
+		require.NoError(t, err)
+		// Alice Alias works_at Google
+		t2, err := session.InsertTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: aliceAlias.ID, PredicateID: pWorksAt.ID, ObjectEntityID: google.ID})
+		require.NoError(t, err)
+		// Bob knows Alice
+		t3, err := session.InsertTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: bob.ID, PredicateID: pKnows.ID, ObjectEntityID: alice.ID})
+		require.NoError(t, err)
+
+		t.Run("Basic Outgoing and Incoming with Alias Expansion", func(t *testing.T) {
+			neighbours, err := session.GetEntityNeighbours(ctx, alice.ID)
+			require.NoError(t, err)
+			assert.Len(t, neighbours, 3)
+
+			// Expect:
+			// 1. Outgoing to Apple (from Alice)
+			// 2. Outgoing to Google (from Alice Alias)
+			// 3. Incoming from Bob (to Alice)
+
+			foundApple := false
+			foundGoogle := false
+			foundBob := false
+
+			for _, n := range neighbours {
+				if n.EntityID == apple.ID {
+					assert.Equal(t, DirectionOutgoing, n.Direction)
+					assert.Equal(t, "works_at", n.PredicateType)
+					assert.Equal(t, t1.ID, n.TripleID)
+					foundApple = true
+				} else if n.EntityID == google.ID {
+					assert.Equal(t, DirectionOutgoing, n.Direction)
+					assert.Equal(t, "works_at", n.PredicateType)
+					assert.Equal(t, t2.ID, n.TripleID)
+					foundGoogle = true
+				} else if n.EntityID == bob.ID {
+					assert.Equal(t, DirectionIncoming, n.Direction)
+					assert.Equal(t, "knows", n.PredicateType)
+					assert.Equal(t, t3.ID, n.TripleID)
+					foundBob = true
+				}
+			}
+			assert.True(t, foundApple)
+			assert.True(t, foundGoogle)
+			assert.True(t, foundBob)
+
+			// Querying through Alias should return same results
+			neighbours2, err := session.GetEntityNeighbours(ctx, aliceAlias.ID)
+			require.NoError(t, err)
+			assert.Len(t, neighbours2, 3)
+		})
+
+		t.Run("Neighbour Canonical Normalization", func(t *testing.T) {
+			// BobAlias -> Bob
+			bobAlias, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob Alias"})
+			_, err = session.LinkEntityAlias(ctx, bobAlias.ID, bob.ID, nil)
+			require.NoError(t, err)
+
+			// New triple: Alice knows BobAlias
+			t4, _ := session.InsertTriple(ctx, Triple{SubjectEntityID: alice.ID, PredicateID: pKnows.ID, ObjectEntityID: bobAlias.ID})
+
+			neighbours, err := session.GetEntityNeighbours(ctx, alice.ID)
+			require.NoError(t, err)
+			assert.Len(t, neighbours, 4)
+
+			foundBobCount := 0
+			for _, n := range neighbours {
+				if n.EntityID == bob.ID {
+					foundBobCount++
+					// Even if stored with bobAlias.ID, it should return bob.ID
+					if n.TripleID == t4.ID {
+						assert.Equal(t, DirectionOutgoing, n.Direction)
+					}
+				}
+			}
+			// One from Bob knows Alice (incoming), one from Alice knows BobAlias (outgoing)
+			assert.Equal(t, 2, foundBobCount)
+		})
+
+		t.Run("No Deduplication", func(t *testing.T) {
+			// Alice works_at Apple (again, distinct triple)
+			// Actually Triple has UNIQUE constraint on (version, subject, predicate, object)
+			// So we need a different predicate or different version to have "duplicate" facts if they are truly identical.
+			// But the requirement says "different triples are different facts".
+
+			// Let's add another 'works_at' predicate with different metadata/validity to allow another triple
+			pWorksAt2, err := session.InsertPredicate(ctx, Predicate{
+				Persistable:         Persistable{OntologyVersionID: version.ID},
+				PredicateDefinition: PredicateDefinition{Type: "works_at", Metadata: json.RawMessage(`{"redundant": true}`)},
+			})
+			require.NoError(t, err)
+			// Note: triple.SubjectEntityID and triple.ObjectEntityID are canonicalized in InsertTriple.
+			// To ensure a distinct triple, we MUST have a different object entity here.
+			// Google is already used in t2 (Alice Alias -> Google).
+			// Let's create a new company for this test.
+			microsoft, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Microsoft"})
+			_, err = session.InsertTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: aliceAlias.ID, PredicateID: pWorksAt2.ID, ObjectEntityID: microsoft.ID})
+			require.NoError(t, err)
+
+			neighbours, err := session.GetEntityNeighbours(ctx, alice.ID)
+			require.NoError(t, err)
+
+			// Previous: Apple (t1), Google (t2), Bob (t3), Bob (t4)
+			// New: Microsoft (t5)
+			assert.Len(t, neighbours, 5)
+
+			microsoftTriples := 0
+			for _, n := range neighbours {
+				if n.EntityID == microsoft.ID {
+					microsoftTriples++
+				}
+			}
+			assert.Equal(t, 1, microsoftTriples)
+		})
+
+		t.Run("Version Scoping", func(t *testing.T) {
+			version2, _ := db.SeedOntology(ctx, sqlDB, def, SeedOptions{Slug: "v-neighbours-2"})
+			session2 := db.NewSession(version2)
+
+			// Querying Alice in session2 should fail because Alice was created in session1's version
+			_, err := session2.GetEntityNeighbours(ctx, alice.ID)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "not found")
+		})
+
+		t.Run("Unknown Entity", func(t *testing.T) {
+			_, err := session.GetEntityNeighbours(ctx, "non-existent-id")
+			assert.Error(t, err)
+		})
+
+		t.Run("No Neighbours", func(t *testing.T) {
+			lonely, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Lonely"})
+			neighbours, err := session.GetEntityNeighbours(ctx, lonely.ID)
+			require.NoError(t, err)
+			assert.Empty(t, neighbours)
+		})
 	})
 }
