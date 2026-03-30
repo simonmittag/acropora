@@ -3,30 +3,39 @@ package acropora
 import (
 	"context"
 	"database/sql"
-	"embed"
 	"fmt"
 
 	"github.com/pressly/goose/v3"
+
+	acropora_db "github.com/simonmittag/acropora/internal/db"
 )
 
-//go:embed migrations/*.sql
-var migrations embed.FS
+// Options allows configuring the Acropora DB wrapper.
+type Options struct {
+	TablePrefix string
+}
 
 // DB is a wrapper type for our sql.DB handle.
 type DB struct {
-	sqlDB *sql.DB
+	sqlDB       *sql.DB
+	tablePrefix string
 }
 
 // New creates a new Acropora DB wrapper, verifies the connection, and runs migrations.
-func New(ctx context.Context, db *sql.DB) (*DB, error) {
+func New(ctx context.Context, dbConn *sql.DB, opts Options) (*DB, error) {
 	info(ctx, "initializing database")
-	if err := db.PingContext(ctx); err != nil {
+	if err := dbConn.PingContext(ctx); err != nil {
 		errorf(ctx, "failed to ping database: %v", err)
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
+	if opts.TablePrefix == "" {
+		opts.TablePrefix = "acropora"
+	}
+
 	a := &DB{
-		sqlDB: db,
+		sqlDB:       dbConn,
+		tablePrefix: opts.TablePrefix,
 	}
 
 	if err := a.migrate(ctx); err != nil {
@@ -48,14 +57,19 @@ func (d *DB) RawDB() *sql.DB {
 
 func (d *DB) migrate(ctx context.Context) error {
 	info(ctx, "running migrations")
-	goose.SetBaseFS(migrations)
-	goose.SetTableName("acropora_db_version")
+
+	// Pass the prefix via context so Go migrations can access it
+	migrationCtx := context.WithValue(ctx, "table_prefix", d.tablePrefix)
+
+	goose.SetTableName(acropora_db.TableName(d.tablePrefix, acropora_db.TableDbVersion))
 
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
 
-	if err := goose.UpContext(ctx, d.sqlDB, "migrations"); err != nil {
+	// Use a dedicated empty directory to satisfy goose's requirement for a path,
+	// while actually running only Go-registered migrations.
+	if err := goose.UpContext(migrationCtx, d.sqlDB, "gomigrations"); err != nil {
 		return err
 	}
 

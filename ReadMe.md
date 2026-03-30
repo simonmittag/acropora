@@ -50,7 +50,7 @@ func main() {
     ctx := context.Background()
     sqlDB, _ := sql.Open("postgres", "postgres://localhost/mydb?sslmode=disable")
     
-    db, err := acropora.New(ctx, sqlDB)
+    db, err := acropora.New(ctx, sqlDB, acropora.Options{})
     if err != nil {
         panic(err)
     }

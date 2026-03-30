@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lucasepe/codename"
+	acropora_db "github.com/simonmittag/acropora/internal/db"
 )
 
 // SeedOptions provides configuration for seeding an ontology.
@@ -37,7 +38,7 @@ type OntologySeeder interface {
 
 // ListOntologyVersions returns all ontology versions, sorted by most recent first.
 func (d *DB) ListOntologyVersions(ctx context.Context) ([]OntologyVersion, error) {
-	rows, err := d.sqlDB.QueryContext(ctx, "SELECT id, slug, hash, created_at, updated_at FROM ontology_versions ORDER BY created_at DESC")
+	rows, err := d.sqlDB.QueryContext(ctx, fmt.Sprintf("SELECT id, slug, hash, created_at, updated_at FROM %s ORDER BY created_at DESC", acropora_db.TableName(d.tablePrefix, acropora_db.TableOntologyVersions)))
 	if err != nil {
 		return nil, fmt.Errorf("querying ontology versions: %w", err)
 	}
@@ -65,7 +66,7 @@ func (d *DB) GetOntologyVersion(ctx context.Context, opts GetOntologyVersionOpti
 		return OntologyVersion{}, fmt.Errorf("only one filter option allowed (id, hash, or slug)")
 	}
 
-	query := "SELECT id, slug, hash, created_at, updated_at FROM ontology_versions"
+	query := fmt.Sprintf("SELECT id, slug, hash, created_at, updated_at FROM %s", acropora_db.TableName(d.tablePrefix, acropora_db.TableOntologyVersions))
 	var arg any
 
 	if len(opts) == 0 {
@@ -164,7 +165,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 	}
 
 	err = tx.QueryRowContext(ctx,
-		"INSERT INTO ontology_versions (id, hash, slug) VALUES ($1, $2, $3) RETURNING created_at, updated_at",
+		fmt.Sprintf("INSERT INTO %s (id, hash, slug) VALUES ($1, $2, $3) RETURNING created_at, updated_at", acropora_db.TableName(d.tablePrefix, acropora_db.TableOntologyVersions)),
 		version.ID, version.Hash, version.Slug).Scan(&version.CreatedAt, &version.UpdatedAt)
 	if err != nil {
 		// Detect duplicate slug error.
@@ -183,7 +184,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 			metadata = json.RawMessage("{}")
 		}
 		_, err = tx.ExecContext(ctx,
-			"INSERT INTO ontology_entities (id, ontology_version_id, type, metadata) VALUES ($1, $2, $3, $4)",
+			fmt.Sprintf("INSERT INTO %s (id, ontology_version_id, type, metadata) VALUES ($1, $2, $3, $4)", acropora_db.TableName(d.tablePrefix, acropora_db.TableOntologyEntities)),
 			id, versionID, eDef.Type, metadata)
 		if err != nil {
 			return OntologyVersion{}, fmt.Errorf("failed to insert entity %s: %w", eDef.Type, err)
@@ -201,7 +202,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 			metadata = json.RawMessage("{}")
 		}
 		_, err = tx.ExecContext(ctx,
-			"INSERT INTO ontology_predicates (id, ontology_version_id, type, metadata) VALUES ($1, $2, $3, $4)",
+			fmt.Sprintf("INSERT INTO %s (id, ontology_version_id, type, metadata) VALUES ($1, $2, $3, $4)", acropora_db.TableName(d.tablePrefix, acropora_db.TableOntologyPredicates)),
 			id, versionID, pDef.Type, metadata)
 		if err != nil {
 			return OntologyVersion{}, fmt.Errorf("failed to insert predicate %s: %w", pDef.Type, err)
@@ -236,7 +237,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 		}
 
 		_, err = tx.ExecContext(ctx,
-			"INSERT INTO ontology_triples (id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id) VALUES ($1, $2, $3, $4, $5)",
+			fmt.Sprintf("INSERT INTO %s (id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id) VALUES ($1, $2, $3, $4, $5)", acropora_db.TableName(d.tablePrefix, acropora_db.TableOntologyTriples)),
 			triple.ID, triple.OntologyVersionID, triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID)
 		if err != nil {
 			return OntologyVersion{}, fmt.Errorf("failed to insert triple (%s, %s, %s): %w", tDef.Subject.Type, tDef.Predicate.Type, tDef.Object.Type, err)

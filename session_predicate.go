@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	acropora_db "github.com/simonmittag/acropora/internal/db"
 )
 
 // MatchPredicate canonicalizes the candidate predicate, attempts to match an existing canonical predicate in the
@@ -48,11 +49,11 @@ func (s *Session) MatchPredicate(ctx context.Context, predicate Predicate) (Pred
 	dedupHash := computePredicateDedupHash(predicate)
 
 	var p Predicate
-	query := `
+	query := fmt.Sprintf(`
 		SELECT id, ontology_version_id, type, metadata, valid_from, valid_to, created_at, updated_at 
-		FROM predicates 
+		FROM %s 
 		WHERE ontology_version_id = $1 AND dedup_hash = $2
-		LIMIT 1`
+		LIMIT 1`, acropora_db.TableName(s.db.tablePrefix, acropora_db.TablePredicates))
 
 	err := s.db.sqlDB.QueryRowContext(ctx, query, s.version.ID, dedupHash).
 		Scan(&p.ID, &p.OntologyVersionID, &p.Type, &p.Metadata, &p.ValidFrom, &p.ValidTo, &p.CreatedAt, &p.UpdatedAt)
@@ -90,7 +91,7 @@ func (s *Session) insertPredicate(ctx context.Context, predicate Predicate) (Pre
 	// Validate against ontology
 	var exists bool
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM ontology_predicates WHERE ontology_version_id = $1 AND type = $2)",
+		fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE ontology_version_id = $1 AND type = $2)", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableOntologyPredicates)),
 		s.version.ID, predicate.Type).Scan(&exists)
 	if err != nil {
 		return Predicate{}, fmt.Errorf("validating predicate against ontology: %w", err)
@@ -117,9 +118,9 @@ func (s *Session) insertPredicate(ctx context.Context, predicate Predicate) (Pre
 
 	now := time.Now().UTC()
 	err = s.db.sqlDB.QueryRowContext(ctx,
-		`INSERT INTO predicates (id, ontology_version_id, type, metadata, valid_from, valid_to, dedup_hash, created_at, updated_at)
+		fmt.Sprintf(`INSERT INTO %s (id, ontology_version_id, type, metadata, valid_from, valid_to, dedup_hash, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 RETURNING created_at, updated_at`,
+		 RETURNING created_at, updated_at`, acropora_db.TableName(s.db.tablePrefix, acropora_db.TablePredicates)),
 		predicate.ID, predicate.OntologyVersionID, predicate.Type, predicate.Metadata, predicate.ValidFrom, predicate.ValidTo, dedupHash, now, now).Scan(&predicate.CreatedAt, &predicate.UpdatedAt)
 	if err != nil {
 		return Predicate{}, fmt.Errorf("inserting predicate: %w", err)
@@ -151,7 +152,7 @@ func computePredicateDedupHash(p Predicate) string {
 func (s *Session) GetPredicateByID(ctx context.Context, id string) (Predicate, error) {
 	var p Predicate
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT id, ontology_version_id, type, metadata, valid_from, valid_to, created_at, updated_at FROM predicates WHERE id = $1 AND ontology_version_id = $2",
+		fmt.Sprintf("SELECT id, ontology_version_id, type, metadata, valid_from, valid_to, created_at, updated_at FROM %s WHERE id = $1 AND ontology_version_id = $2", acropora_db.TableName(s.db.tablePrefix, acropora_db.TablePredicates)),
 		id, s.version.ID).Scan(&p.ID, &p.OntologyVersionID, &p.Type, &p.Metadata, &p.ValidFrom, &p.ValidTo, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -2,8 +2,10 @@ package acropora
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	acropora_db "github.com/simonmittag/acropora/internal/db"
 	"github.com/stretchr/testify/require"
 )
 
@@ -12,11 +14,20 @@ func TestSession(t *testing.T) {
 	sqlDB, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	db, err := New(ctx, sqlDB)
+	tablePrefix := "acropora"
+	db, err := New(ctx, sqlDB, Options{TablePrefix: tablePrefix})
 	require.NoError(t, err)
 
 	// Ensure a clean slate for TestSession
-	_, _ = sqlDB.ExecContext(ctx, "TRUNCATE TABLE triples, predicates, entities, entity_aliases, ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
+	_, _ = sqlDB.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s, %s, %s, %s, %s, %s, %s, %s RESTART IDENTITY CASCADE",
+		acropora_db.TableName(tablePrefix, acropora_db.TableTriples),
+		acropora_db.TableName(tablePrefix, acropora_db.TablePredicates),
+		acropora_db.TableName(tablePrefix, acropora_db.TableEntities),
+		acropora_db.TableName(tablePrefix, acropora_db.TableEntityAliases),
+		acropora_db.TableName(tablePrefix, acropora_db.TableOntologyTriples),
+		acropora_db.TableName(tablePrefix, acropora_db.TableOntologyPredicates),
+		acropora_db.TableName(tablePrefix, acropora_db.TableOntologyEntities),
+		acropora_db.TableName(tablePrefix, acropora_db.TableOntologyVersions)))
 
 	// 1. Seed ontology
 	entities := []EntityDefinition{

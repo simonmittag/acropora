@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	acropora_db "github.com/simonmittag/acropora/internal/db"
 )
 
 // MatchEntity canonicalizes the candidate entity, attempts to match an existing canonical entity in the
@@ -74,7 +75,7 @@ func (s *Session) insertEntity(ctx context.Context, entity Entity) (Entity, erro
 	// Validate against ontology
 	var exists bool
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM ontology_entities WHERE ontology_version_id = $1 AND type = $2)",
+		fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE ontology_version_id = $1 AND type = $2)", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableOntologyEntities)),
 		s.version.ID, entity.Type).Scan(&exists)
 	if err != nil {
 		return Entity{}, fmt.Errorf("validating entity against ontology: %w", err)
@@ -93,9 +94,9 @@ func (s *Session) insertEntity(ctx context.Context, entity Entity) (Entity, erro
 
 	now := time.Now()
 	err = s.db.sqlDB.QueryRowContext(ctx,
-		`INSERT INTO entities (id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at)
+		fmt.Sprintf(`INSERT INTO %s (id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		 RETURNING created_at, updated_at`,
+		 RETURNING created_at, updated_at`, acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntities)),
 		entity.ID, entity.OntologyVersionID, entity.Type, entity.RawName, entity.CanonicalName, entity.Metadata, now, now).Scan(&entity.CreatedAt, &entity.UpdatedAt)
 	if err != nil {
 		return Entity{}, fmt.Errorf("inserting entity: %w", err)
@@ -108,7 +109,7 @@ func (s *Session) insertEntity(ctx context.Context, entity Entity) (Entity, erro
 func (s *Session) GetEntityByID(ctx context.Context, id string) (Entity, error) {
 	var e Entity
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at FROM entities WHERE id = $1 AND ontology_version_id = $2",
+		fmt.Sprintf("SELECT id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at FROM %s WHERE id = $1 AND ontology_version_id = $2", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntities)),
 		id, s.version.ID).Scan(&e.ID, &e.OntologyVersionID, &e.Type, &e.RawName, &e.CanonicalName, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -129,7 +130,7 @@ func (s *Session) GetEntityByRawName(ctx context.Context, rawName string) (Entit
 
 	var e Entity
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at FROM entities WHERE canonical_name = $1 AND ontology_version_id = $2",
+		fmt.Sprintf("SELECT id, ontology_version_id, type, raw_name, canonical_name, metadata, created_at, updated_at FROM %s WHERE canonical_name = $1 AND ontology_version_id = $2", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntities)),
 		canonicalName, s.version.ID).Scan(&e.ID, &e.OntologyVersionID, &e.Type, &e.RawName, &e.CanonicalName, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -169,14 +170,14 @@ func (s *Session) LinkEntityAlias(ctx context.Context, aliasEntityID, canonicalE
 
 	// 1. Ensure both exist and belong to session ontology version
 	var aType, cType string
-	err = tx.QueryRowContext(ctx, "SELECT type FROM entities WHERE id = $1 AND ontology_version_id = $2", aliasEntityID, s.version.ID).Scan(&aType)
+	err = tx.QueryRowContext(ctx, fmt.Sprintf("SELECT type FROM %s WHERE id = $1 AND ontology_version_id = $2", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntities)), aliasEntityID, s.version.ID).Scan(&aType)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return EntityAlias{}, fmt.Errorf("alias entity %s not found in session ontology version", aliasEntityID)
 		}
 		return EntityAlias{}, fmt.Errorf("checking alias entity %s: %w", aliasEntityID, err)
 	}
-	err = tx.QueryRowContext(ctx, "SELECT type FROM entities WHERE id = $1 AND ontology_version_id = $2", canonicalEntityID, s.version.ID).Scan(&cType)
+	err = tx.QueryRowContext(ctx, fmt.Sprintf("SELECT type FROM %s WHERE id = $1 AND ontology_version_id = $2", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntities)), canonicalEntityID, s.version.ID).Scan(&cType)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return EntityAlias{}, fmt.Errorf("canonical entity %s not found in session ontology version", canonicalEntityID)
@@ -210,7 +211,7 @@ func (s *Session) LinkEntityAlias(ctx context.Context, aliasEntityID, canonicalE
 	// But according to rule 4: "migrate C's alias link to point directly to A".
 	// This means if B -> A, and we link A -> X, then B must point to X.
 	_, err = tx.ExecContext(ctx,
-		"UPDATE entity_aliases SET canonical_entity_id = $1, updated_at = now() WHERE canonical_entity_id = $2 AND ontology_version_id = $3",
+		fmt.Sprintf("UPDATE %s SET canonical_entity_id = $1, updated_at = now() WHERE canonical_entity_id = $2 AND ontology_version_id = $3", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntityAliases)),
 		rootID, aliasEntityID, s.version.ID)
 	if err != nil {
 		return EntityAlias{}, fmt.Errorf("reparenting aliases: %w", err)
@@ -229,13 +230,13 @@ func (s *Session) LinkEntityAlias(ctx context.Context, aliasEntityID, canonicalE
 	ea.OntologyVersionID = s.version.ID
 
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO entity_aliases (id, ontology_version_id, alias_entity_id, canonical_entity_id, metadata, created_at, updated_at)
+		fmt.Sprintf(`INSERT INTO %s (id, ontology_version_id, alias_entity_id, canonical_entity_id, metadata, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 ON CONFLICT (ontology_version_id, alias_entity_id) DO UPDATE 
 		 SET canonical_entity_id = EXCLUDED.canonical_entity_id, 
 		     metadata = EXCLUDED.metadata,
 		     updated_at = EXCLUDED.updated_at
-		 RETURNING id, created_at, updated_at`,
+		 RETURNING id, created_at, updated_at`, acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntityAliases)),
 		ea.ID, ea.OntologyVersionID, ea.AliasEntityID, ea.CanonicalEntityID, ea.Metadata, now, now).Scan(&ea.ID, &ea.CreatedAt, &ea.UpdatedAt)
 	if err != nil {
 		return EntityAlias{}, fmt.Errorf("upserting alias: %w", err)
@@ -252,7 +253,7 @@ func (s *Session) LinkEntityAlias(ctx context.Context, aliasEntityID, canonicalE
 func (s *Session) GetAntiAliasedEntityID(ctx context.Context, entityID string) (string, error) {
 	var canonicalID string
 	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT canonical_entity_id FROM entity_aliases WHERE alias_entity_id = $1 AND ontology_version_id = $2",
+		fmt.Sprintf("SELECT canonical_entity_id FROM %s WHERE alias_entity_id = $1 AND ontology_version_id = $2", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntityAliases)),
 		entityID, s.version.ID).Scan(&canonicalID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -266,7 +267,7 @@ func (s *Session) GetAntiAliasedEntityID(ctx context.Context, entityID string) (
 func (s *Session) getCanonicalEntityIDTx(ctx context.Context, tx *sql.Tx, entityID string) (string, error) {
 	var canonicalID string
 	err := tx.QueryRowContext(ctx,
-		"SELECT canonical_entity_id FROM entity_aliases WHERE alias_entity_id = $1 AND ontology_version_id = $2",
+		fmt.Sprintf("SELECT canonical_entity_id FROM %s WHERE alias_entity_id = $1 AND ontology_version_id = $2", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntityAliases)),
 		entityID, s.version.ID).Scan(&canonicalID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -285,7 +286,7 @@ func (s *Session) GetAliasGroupEntityIDs(ctx context.Context, entityID string) (
 	}
 
 	rows, err := s.db.sqlDB.QueryContext(ctx,
-		"SELECT alias_entity_id FROM entity_aliases WHERE canonical_entity_id = $1 AND ontology_version_id = $2",
+		fmt.Sprintf("SELECT alias_entity_id FROM %s WHERE canonical_entity_id = $1 AND ontology_version_id = $2", acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntityAliases)),
 		canonicalID, s.version.ID)
 	if err != nil {
 		return nil, "", err
@@ -325,7 +326,7 @@ func (s *Session) GetEntityNeighbours(ctx context.Context, entityID string) ([]N
 	}
 
 	// 3. Query all runtime triples where subject or object is in the alias group
-	query := `
+	query := fmt.Sprintf(`
 		SELECT 
 			t.id AS triple_id,
 			t.subject_entity_id,
@@ -338,14 +339,14 @@ func (s *Session) GetEntityNeighbours(ctx context.Context, entityID string) ([]N
 			e.type AS neighbour_entity_type,
 			e.canonical_name AS neighbour_canonical_name,
 			e.metadata AS neighbour_metadata
-		FROM triples t
-		JOIN predicates p ON t.predicate_id = p.id
-		JOIN entities e ON (
+		FROM %s t
+		JOIN %s p ON t.predicate_id = p.id
+		JOIN %s e ON (
 			(t.subject_entity_id = ANY($1) AND t.object_entity_id = e.id) OR
 			(t.object_entity_id = ANY($1) AND t.subject_entity_id = e.id)
 		)
 		WHERE t.ontology_version_id = $2
-	`
+	`, acropora_db.TableName(s.db.tablePrefix, acropora_db.TableTriples), acropora_db.TableName(s.db.tablePrefix, acropora_db.TablePredicates), acropora_db.TableName(s.db.tablePrefix, acropora_db.TableEntities))
 
 	rows, err := s.db.sqlDB.QueryContext(ctx, query, pq.Array(groupIDs), s.version.ID)
 	if err != nil {

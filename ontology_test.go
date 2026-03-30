@@ -3,11 +3,13 @@ package acropora
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	acropora_db "github.com/simonmittag/acropora/internal/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -64,17 +66,52 @@ func TestNew(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	a, err := New(ctx, db)
+	a, err := New(ctx, db, Options{})
 	if err != nil {
 		t.Fatalf("failed to initialize acropora: %v", err)
 	}
 
 	tables := []string{
-		"ontology_versions",
-		"ontology_entities",
-		"ontology_predicates",
-		"ontology_triples",
-		"acropora_db_version",
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyVersions),
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyEntities),
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyPredicates),
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyTriples),
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableDbVersion),
+	}
+
+	for _, table := range tables {
+		var exists bool
+		query := `SELECT EXISTS (
+			SELECT FROM information_schema.tables 
+			WHERE table_name = $1
+		)`
+		err := a.RawDB().QueryRowContext(ctx, query, table).Scan(&exists)
+		if err != nil {
+			t.Errorf("failed to check existence of table %s: %v", table, err)
+		}
+		if !exists {
+			t.Errorf("table %s does not exist", table)
+		}
+	}
+}
+
+func TestNewWithCustomPrefix(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	prefix := "custom_app"
+	a, err := New(ctx, db, Options{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("failed to initialize acropora: %v", err)
+	}
+
+	tables := []string{
+		prefix + "_ontology_versions",
+		prefix + "_ontology_entities",
+		prefix + "_ontology_predicates",
+		prefix + "_ontology_triples",
+		prefix + "_db_version",
 	}
 
 	for _, table := range tables {
@@ -98,13 +135,17 @@ func TestSeedOntology(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	a, err := New(ctx, db)
+	a, err := New(ctx, db, Options{})
 	if err != nil {
 		t.Fatalf("failed to initialize acropora: %v", err)
 	}
 
 	// Ensure a clean slate for deterministic test runs (even if container is fresh)
-	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_triples, ontology_predicates, ontology_entities, ontology_versions RESTART IDENTITY CASCADE")
+	_, _ = a.RawDB().ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s, %s, %s, %s RESTART IDENTITY CASCADE",
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyTriples),
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyPredicates),
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyEntities),
+		acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyVersions)))
 
 	def := Definition{
 		Entities: []EntityDefinition{
@@ -144,17 +185,17 @@ func TestSeedOntology(t *testing.T) {
 
 	// Verify counts in DB
 	var count int
-	err = db.QueryRowContext(ctx, "SELECT count(*) FROM ontology_entities WHERE ontology_version_id = $1", version.ID).Scan(&count)
+	err = db.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s WHERE ontology_version_id = $1", acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyEntities)), version.ID).Scan(&count)
 	if err != nil || count != 2 {
 		t.Errorf("expected 2 entities, got %d (err: %v)", count, err)
 	}
 
-	err = db.QueryRowContext(ctx, "SELECT count(*) FROM ontology_predicates WHERE ontology_version_id = $1", version.ID).Scan(&count)
+	err = db.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s WHERE ontology_version_id = $1", acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyPredicates)), version.ID).Scan(&count)
 	if err != nil || count != 1 {
 		t.Errorf("expected 1 predicate, got %d (err: %v)", count, err)
 	}
 
-	err = db.QueryRowContext(ctx, "SELECT count(*) FROM ontology_triples WHERE ontology_version_id = $1", version.ID).Scan(&count)
+	err = db.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s WHERE ontology_version_id = $1", acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyTriples)), version.ID).Scan(&count)
 	if err != nil || count != 1 {
 		t.Errorf("expected 1 triple, got %d (err: %v)", count, err)
 	}
@@ -206,7 +247,7 @@ func TestSeedOntology_MapLookupSafety(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	a, err := New(ctx, db)
+	a, err := New(ctx, db, Options{})
 	require.NoError(t, err)
 
 	// Construct a definition that MIGHT pass validation if it was shallow,
@@ -256,13 +297,13 @@ func TestListAndDefaultOntologyVersions(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	a, err := New(ctx, db)
+	a, err := New(ctx, db, Options{})
 	if err != nil {
 		t.Fatalf("failed to initialize acropora: %v", err)
 	}
 
 	// Ensure a clean slate
-	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_versions RESTART IDENTITY CASCADE")
+	_, _ = a.RawDB().ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE", acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyVersions)))
 
 	// Seed first version
 	def1 := Definition{
@@ -319,13 +360,13 @@ func TestOntologySlugs(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	a, err := New(ctx, db)
+	a, err := New(ctx, db, Options{})
 	if err != nil {
 		t.Fatalf("failed to initialize acropora: %v", err)
 	}
 
 	// Ensure a clean slate
-	_, _ = a.RawDB().ExecContext(ctx, "TRUNCATE TABLE ontology_versions RESTART IDENTITY CASCADE")
+	_, _ = a.RawDB().ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE", acropora_db.TableName(a.tablePrefix, acropora_db.TableOntologyVersions)))
 
 	def := Definition{Entities: []EntityDefinition{{Type: "SlugTest"}}}
 
