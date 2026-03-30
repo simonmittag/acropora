@@ -353,8 +353,32 @@ func TestOntologySlugs(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for duplicate slug, got nil")
 	}
+	assert.Contains(t, err.Error(), "failed to insert ontology version: duplicate slug")
 
-	// 4. Get by slug
+	// 4. Verify slug format (codename-xxxx where xxxx is 4 chars)
+	vFormat, err := a.SeedOntology(ctx, db, Definition{Entities: []EntityDefinition{{Type: "FormatTest"}}}, SeedOptions{})
+	require.NoError(t, err)
+	// slug should look like "codename-xxxx"
+	// we expect at least one hyphen and exactly 4 characters after the last hyphen
+	// Note: codename might contain hyphens, so we look for the last one
+	slug := vFormat.Slug
+	lastHyphen := -1
+	for i := range slug {
+		if slug[i] == '-' {
+			lastHyphen = i
+		}
+	}
+	require.NotEqual(t, -1, lastHyphen, "slug should contain at least one hyphen")
+	suffix := slug[lastHyphen+1:]
+	assert.Equal(t, 4, len(suffix), "suffix should be exactly 4 characters")
+
+	// 5. Verify suffix is base64 (approximate check for base64 characters)
+	for _, c := range suffix {
+		isBase64 := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
+		assert.True(t, isBase64, "suffix character %c should be base64-url", c)
+	}
+
+	// 6. Get by slug
 	vFetched, err := a.GetOntologyVersion(ctx, GetOntologyVersionOptions{OptionSlug: explicitSlug})
 	if err != nil {
 		t.Fatalf("failed to get version by slug: %v", err)

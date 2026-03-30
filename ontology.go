@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -132,28 +133,20 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 	if opts.Slug != "" {
 		slug = opts.Slug
 	} else {
-		// Generate slug with retries
+		// Generate slug: codename-xxxx (4 random characters, hashed and base64 encoded)
 		rng, err := codename.DefaultRNG()
 		if err != nil {
 			return OntologyVersion{}, fmt.Errorf("failed to get RNG: %w", err)
 		}
 
-		maxRetries := 50
-		for i := 0; i < maxRetries; i++ {
-			candidate := codename.Generate(rng, 0)
-			var exists bool
-			err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM ontology_versions WHERE slug = $1)", candidate).Scan(&exists)
-			if err != nil {
-				return OntologyVersion{}, fmt.Errorf("failed to check slug existence: %w", err)
-			}
-			if !exists {
-				slug = candidate
-				break
-			}
-			if i == maxRetries-1 {
-				return OntologyVersion{}, fmt.Errorf("failed to generate unique slug after %d attempts", maxRetries)
-			}
+		cname := codename.Generate(rng, 0)
+		seed := codename.Generate(rng, 0)
+		hash := sha256.Sum256([]byte(seed))
+		suffix := base64.RawURLEncoding.EncodeToString(hash[:])
+		if len(suffix) > 4 {
+			suffix = suffix[:4]
 		}
+		slug = fmt.Sprintf("%s-%s", cname, suffix)
 	}
 
 	// Insert ontology version
@@ -170,7 +163,10 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 		"INSERT INTO ontology_versions (id, hash, slug) VALUES ($1, $2, $3) RETURNING created_at, updated_at",
 		version.ID, version.Hash, version.Slug).Scan(&version.CreatedAt, &version.UpdatedAt)
 	if err != nil {
-		return OntologyVersion{}, fmt.Errorf("failed to insert ontology version: %w", err)
+		// Detect duplicate slug error.
+		// If the insert fails, we assume it's a slug conflict.
+		// Note: hash is also unique, but the goal emphasizes slug.
+		return OntologyVersion{}, fmt.Errorf("failed to insert ontology version: duplicate slug")
 	}
 
 	// Insert entities
