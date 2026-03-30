@@ -29,9 +29,9 @@ type PredicateDefinition struct {
 
 // TripleDefinition represents the core properties of a triple definition.
 type TripleDefinition struct {
-	Subject   *EntityDefinition
-	Predicate *PredicateDefinition
-	Object    *EntityDefinition
+	Subject   EntityDefinition
+	Predicate PredicateDefinition
+	Object    EntityDefinition
 }
 
 // Definition is a high-level ontology definition.

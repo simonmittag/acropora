@@ -33,14 +33,14 @@ func TestSession(t *testing.T) {
 		Predicates: predicates,
 		Triples: []TripleDefinition{
 			{
-				Subject:   &entities[0],   // Person
-				Predicate: &predicates[0], // works_at
-				Object:    &entities[1],   // Company
+				Subject:   entities[0],   // Person
+				Predicate: predicates[0], // works_at
+				Object:    entities[1],   // Company
 			},
 			{
-				Subject:   &entities[0],   // Person
-				Predicate: &predicates[1], // knows
-				Object:    &entities[0],   // Person
+				Subject:   entities[0],   // Person
+				Predicate: predicates[1], // knows
+				Object:    entities[0],   // Person
 			},
 		},
 	}

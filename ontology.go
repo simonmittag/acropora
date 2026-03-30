@@ -174,7 +174,7 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 	}
 
 	// Insert entities
-	entityToID := make(map[*EntityDefinition]string)
+	entityToID := make(map[string]string)
 	for i := range def.Entities {
 		eDef := &def.Entities[i]
 		id := uuid.New().String()
@@ -188,11 +188,11 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 		if err != nil {
 			return OntologyVersion{}, fmt.Errorf("failed to insert entity %s: %w", eDef.Type, err)
 		}
-		entityToID[eDef] = id
+		entityToID[eDef.Type] = id
 	}
 
 	// Insert predicates
-	predicateToID := make(map[*PredicateDefinition]string)
+	predicateToID := make(map[string]string)
 	for i := range def.Predicates {
 		pDef := &def.Predicates[i]
 		id := uuid.New().String()
@@ -206,15 +206,24 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 		if err != nil {
 			return OntologyVersion{}, fmt.Errorf("failed to insert predicate %s: %w", pDef.Type, err)
 		}
-		predicateToID[pDef] = id
+		predicateToID[pDef.Type] = id
 	}
 
 	// Insert triples
 	for _, tDef := range def.Triples {
 		id := uuid.New().String()
-		subjectID := entityToID[tDef.Subject]
-		predicateID := predicateToID[tDef.Predicate]
-		objectID := entityToID[tDef.Object]
+		subjectID, ok := entityToID[tDef.Subject.Type]
+		if !ok {
+			return OntologyVersion{}, fmt.Errorf("subject type %s not found in entity definitions", tDef.Subject.Type)
+		}
+		predicateID, ok := predicateToID[tDef.Predicate.Type]
+		if !ok {
+			return OntologyVersion{}, fmt.Errorf("predicate type %s not found in predicate definitions", tDef.Predicate.Type)
+		}
+		objectID, ok := entityToID[tDef.Object.Type]
+		if !ok {
+			return OntologyVersion{}, fmt.Errorf("object type %s not found in entity definitions", tDef.Object.Type)
+		}
 
 		triple := &Triple{
 			Persistable: Persistable{
@@ -243,35 +252,29 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 
 func validateOntologyDefinition(def Definition) error {
 	entityTypes := make(map[string]bool)
-	entityPtrs := make(map[*EntityDefinition]bool)
-	for i := range def.Entities {
-		e := &def.Entities[i]
+	for _, e := range def.Entities {
 		if entityTypes[e.Type] {
 			return fmt.Errorf("duplicate entity type: %s", e.Type)
 		}
 		entityTypes[e.Type] = true
-		entityPtrs[e] = true
 	}
 
 	predicateTypes := make(map[string]bool)
-	predicatePtrs := make(map[*PredicateDefinition]bool)
-	for i := range def.Predicates {
-		p := &def.Predicates[i]
+	for _, p := range def.Predicates {
 		if predicateTypes[p.Type] {
 			return fmt.Errorf("duplicate predicate type: %s", p.Type)
 		}
 		predicateTypes[p.Type] = true
-		predicatePtrs[p] = true
 	}
 
 	for _, t := range def.Triples {
-		if t.Subject == nil || !entityPtrs[t.Subject] {
+		if !entityTypes[t.Subject.Type] {
 			return fmt.Errorf("triple references non-existent subject entity")
 		}
-		if t.Predicate == nil || !predicatePtrs[t.Predicate] {
+		if !predicateTypes[t.Predicate.Type] {
 			return fmt.Errorf("triple references non-existent predicate")
 		}
-		if t.Object == nil || !entityPtrs[t.Object] {
+		if !entityTypes[t.Object.Type] {
 			return fmt.Errorf("triple references non-existent object entity")
 		}
 	}
@@ -280,7 +283,7 @@ func validateOntologyDefinition(def Definition) error {
 }
 
 func computeOntologyHash(def Definition) (string, error) {
-	// To compute a stable hash with pointers, we transform it into a canonical representation using names
+	// To compute a stable hash, we transform it into a canonical representation using names
 	type TripleCanonical struct {
 		SubjectType   string
 		PredicateType string

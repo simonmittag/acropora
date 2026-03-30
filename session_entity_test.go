@@ -262,9 +262,9 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 		// Re-point triples to the new entities slice to pass pointer validation in SeedOntology
 		def2.Triples = []TripleDefinition{
 			{
-				Subject:   &def2.Entities[1],   // "Person"
-				Predicate: &def2.Predicates[0], // "works_at"
-				Object:    &def2.Entities[2],   // "Company"
+				Subject:   def2.Entities[1],   // "Person"
+				Predicate: def2.Predicates[0], // "works_at"
+				Object:    def2.Entities[2],   // "Company"
 			},
 		}
 
@@ -404,8 +404,8 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			},
 		}
 		def.Triples = []TripleDefinition{
-			{Subject: &def.Entities[0], Predicate: &def.Predicates[0], Object: &def.Entities[1]}, // Person works_at Company
-			{Subject: &def.Entities[0], Predicate: &def.Predicates[1], Object: &def.Entities[0]}, // Person knows Person
+			{Subject: def.Entities[0], Predicate: def.Predicates[0], Object: def.Entities[1]}, // Person works_at Company
+			{Subject: def.Entities[0], Predicate: def.Predicates[1], Object: def.Entities[0]}, // Person knows Person
 		}
 		version, err := db.SeedOntology(ctx, sqlDB, def, SeedOptions{Slug: "v-neighbours"})
 		require.NoError(t, err)
