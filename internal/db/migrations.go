@@ -4,13 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-
-	"github.com/pressly/goose/v3"
 )
-
-func init() {
-	goose.AddNamedMigrationContext("00001_initial.go", up00001, down00001)
-}
 
 func GetPrefix(ctx context.Context) string {
 	if p, ok := ctx.Value("table_prefix").(string); ok {
@@ -19,9 +13,44 @@ func GetPrefix(ctx context.Context) string {
 	return "acropora"
 }
 
-func up00001(ctx context.Context, tx *sql.Tx) error {
-	p := GetPrefix(ctx)
+func Migrate(ctx context.Context, db *sql.DB, prefix string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	versionTable := TableName(prefix, TableDbVersion)
+
+	// Check if version table exists
+	var exists bool
+	query := `SELECT EXISTS (
+		SELECT FROM information_schema.tables 
+		WHERE table_name = $1
+	)`
+	err = tx.QueryRowContext(ctx, query, versionTable).Scan(&exists)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		if err := migration_000001(ctx, tx, prefix); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func migration_000001(ctx context.Context, tx *sql.Tx, p string) error {
 	_, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE %s (
+			version INTEGER PRIMARY KEY,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+
+		INSERT INTO %s (version) VALUES (1);
+
 		CREATE TABLE %s (
 			id TEXT PRIMARY KEY,
 			hash TEXT NOT NULL UNIQUE,
@@ -135,6 +164,8 @@ func up00001(ctx context.Context, tx *sql.Tx) error {
 		CREATE INDEX idx_entity_aliases_alias_entity_id ON %s(alias_entity_id);
 		CREATE INDEX idx_entity_aliases_canonical_entity_id ON %s(canonical_entity_id);
 	`,
+		TableName(p, TableDbVersion),
+		TableName(p, TableDbVersion),
 		TableName(p, TableOntologyVersions),
 		TableName(p, TableOntologyEntities), TableName(p, TableOntologyVersions),
 		TableName(p, TableOntologyEntities), TableName(p, TableOntologyEntities),
@@ -150,30 +181,6 @@ func up00001(ctx context.Context, tx *sql.Tx) error {
 		TableName(p, TableTriples), TableName(p, TableTriples), TableName(p, TableTriples), TableName(p, TableTriples),
 		TableName(p, TableEntityAliases), TableName(p, TableOntologyVersions), TableName(p, TableEntities), TableName(p, TableEntities),
 		TableName(p, TableEntityAliases), TableName(p, TableEntityAliases), TableName(p, TableEntityAliases),
-	))
-	return err
-}
-
-func down00001(ctx context.Context, tx *sql.Tx) error {
-	p := GetPrefix(ctx)
-	_, err := tx.ExecContext(ctx, fmt.Sprintf(`
-		DROP TABLE %s;
-		DROP TABLE %s;
-		DROP TABLE %s;
-		DROP TABLE %s;
-		DROP TABLE %s;
-		DROP TABLE %s;
-		DROP TABLE %s;
-		DROP TABLE %s;
-	`,
-		TableName(p, TableEntityAliases),
-		TableName(p, TableTriples),
-		TableName(p, TablePredicates),
-		TableName(p, TableEntities),
-		TableName(p, TableOntologyTriples),
-		TableName(p, TableOntologyPredicates),
-		TableName(p, TableOntologyEntities),
-		TableName(p, TableOntologyVersions),
 	))
 	return err
 }
