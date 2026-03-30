@@ -13,8 +13,50 @@ import (
 	"github.com/lib/pq"
 )
 
-// InsertEntity inserts a new entity into the runtime.
-func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, error) {
+// MatchEntity canonicalizes the candidate entity, attempts to match an existing canonical entity in the
+// current session ontology version, and inserts a new canonical entity if no match is found.
+//
+// This method provides identity-aware entity materialization. It first normalizes the input entity's
+// name and checks the session's ontology version for any existing entity with the same canonical
+// name or linked via an alias. If a match is found, the existing canonical entity is returned.
+// Otherwise, a new entity is created and inserted into the runtime after validating its type
+// against the ontology.
+//
+// MatchEntity is the primary public entrypoint for ensuring an entity exists within a session's
+// context without creating duplicate entries for the same real-world identity.
+func (s *Session) MatchEntity(ctx context.Context, entity Entity) (Entity, error) {
+	if entity.Type == "" {
+		return Entity{}, errors.New("entity type cannot be empty")
+	}
+
+	trimmedRaw := strings.TrimSpace(entity.RawName)
+	if trimmedRaw == "" {
+		return Entity{}, errors.New("entity raw name cannot be empty")
+	}
+
+	// 1. Try to find existing entity by name (handles canonical name and aliases)
+	found, err := s.GetEntityByRawName(ctx, entity.RawName)
+	if err == nil {
+		// Found existing entity. Ensure types match if requested.
+		// If the existing entity has a different type, we could either return an error,
+		// or just return the found entity. The requirements say "takes a name and an optional entity type".
+		// In our Entity struct, Type is required for insertEntity.
+		return found, nil
+	}
+
+	// If the error is anything other than "not found", return it.
+	if !strings.Contains(err.Error(), "not found") {
+		return Entity{}, fmt.Errorf("resolving entity: %w", err)
+	}
+
+	// 2. Not found, so insert new entity
+	return s.insertEntity(ctx, entity)
+}
+
+// insertEntity is an internal helper that performs the actual row insertion.
+// It is used after matching fails in MatchEntity or by other internal code paths
+// that truly require forced insertion.
+func (s *Session) insertEntity(ctx context.Context, entity Entity) (Entity, error) {
 	if entity.Type == "" {
 		return Entity{}, errors.New("entity type cannot be empty")
 	}
@@ -58,37 +100,6 @@ func (s *Session) InsertEntity(ctx context.Context, entity Entity) (Entity, erro
 	}
 
 	return entity, nil
-}
-
-// ResolveOrInsertEntity attempts to find an existing entity by normalizing the name and checking both
-// canonical names and known aliases. If not found, it creates a new entity.
-func (s *Session) ResolveOrInsertEntity(ctx context.Context, entity Entity) (Entity, error) {
-	if entity.Type == "" {
-		return Entity{}, errors.New("entity type cannot be empty")
-	}
-
-	trimmedRaw := strings.TrimSpace(entity.RawName)
-	if trimmedRaw == "" {
-		return Entity{}, errors.New("entity raw name cannot be empty")
-	}
-
-	// 1. Try to find existing entity by name (handles canonical name and aliases)
-	found, err := s.GetEntityByRawName(ctx, entity.RawName)
-	if err == nil {
-		// Found existing entity. Ensure types match if requested.
-		// If the existing entity has a different type, we could either return an error,
-		// or just return the found entity. The requirements say "takes a name and an optional entity type".
-		// In our Entity struct, Type is required for InsertEntity.
-		return found, nil
-	}
-
-	// If the error is anything other than "not found", return it.
-	if !strings.Contains(err.Error(), "not found") {
-		return Entity{}, fmt.Errorf("resolving entity: %w", err)
-	}
-
-	// 2. Not found, so insert new entity
-	return s.InsertEntity(ctx, entity)
 }
 
 // GetEntityByID fetches an entity by its ID, scoped to the session's ontology version.

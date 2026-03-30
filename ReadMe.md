@@ -92,36 +92,36 @@ Once the ontology is seeded, use a `Session` to interact with your data.
 session := db.NewSession(version)
 
 // Insert Entities
-john, _ := session.InsertEntity(ctx, acropora.Entity{
+john, _ := session.MatchEntity(ctx, acropora.Entity{
     EntityDefinition: acropora.EntityDefinition{Type: "Person"},
     RawName: "John Doe",
 })
 
-jane, _ := session.InsertEntity(ctx, acropora.Entity{
+jane, _ := session.MatchEntity(ctx, acropora.Entity{
     EntityDefinition: acropora.EntityDefinition{Type: "Person"},
     RawName: "Jane Smith",
 })
 
-company, _ := session.InsertEntity(ctx, acropora.Entity{
+company, _ := session.MatchEntity(ctx, acropora.Entity{
     EntityDefinition: acropora.EntityDefinition{Type: "Company"},
     RawName: "Acme Corp",
 })
 
 // Create Triples (Subject - Predicate - Object)
-predicate, _ := session.InsertPredicate(ctx, acropora.Predicate{
+predicate, _ := session.MatchPredicate(ctx, acropora.Predicate{
     PredicateDefinition: acropora.PredicateDefinition{
         Type:      "works_at",
         ValidFrom: time.Now(),
     },
 })
 
-session.InsertTriple(ctx, acropora.Triple{
+session.MatchTriple(ctx, acropora.Triple{
     SubjectEntityID: john.ID,
     PredicateID:     predicate.ID,
     ObjectEntityID:  company.ID,
 })
 
-session.InsertTriple(ctx, acropora.Triple{
+session.MatchTriple(ctx, acropora.Triple{
     SubjectEntityID: jane.ID,
     PredicateID:     predicate.ID,
     ObjectEntityID:  company.ID,

@@ -12,13 +12,13 @@ import (
 
 func testTriple(t *testing.T, ctx context.Context, session *Session, db *DB, sqlDB *sql.DB, version *OntologyVersion) {
 	t.Run("Triple insert with metadata", func(t *testing.T) {
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice Metadata"})
+		person, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice Metadata"})
 		require.NoError(t, err)
-		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "ACME Metadata"})
+		company, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "ACME Metadata"})
 		require.NoError(t, err)
 
 		from := time.Now().Truncate(time.Second)
-		p, err := session.InsertPredicate(ctx, Predicate{
+		p, err := session.MatchPredicate(ctx, Predicate{
 			PredicateDefinition: PredicateDefinition{
 				Type: "works_at",
 			},
@@ -27,7 +27,7 @@ func testTriple(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 		require.NoError(t, err)
 		assert.True(t, p.ValidFrom.Equal(from))
 
-		triple, err := session.InsertTriple(ctx, Triple{
+		triple, err := session.MatchTriple(ctx, Triple{
 			SubjectEntityID: person.ID,
 			PredicateID:     p.ID,
 			ObjectEntityID:  company.ID,
@@ -42,11 +42,11 @@ func testTriple(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 
 	t.Run("TripleDefinition insert and read", func(t *testing.T) {
 		// Create entities and predicate
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice"})
+		person, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice"})
 		require.NoError(t, err)
-		company, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "ACME"})
+		company, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "ACME"})
 		require.NoError(t, err)
-		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
+		worksAt, err := session.MatchPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
 
 		triple := Triple{
@@ -55,7 +55,7 @@ func testTriple(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			ObjectEntityID:  company.ID,
 		}
 
-		inserted, err := session.InsertTriple(ctx, triple)
+		inserted, err := session.MatchTriple(ctx, triple)
 		require.NoError(t, err)
 		assert.NotEmpty(t, inserted.ID)
 
@@ -71,7 +71,7 @@ func testTriple(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 	})
 
 	t.Run("TripleDefinition validation failure - semantic", func(t *testing.T) {
-		person, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob"})
+		person, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob"})
 		require.NoError(t, err)
 		// Try to make Person works_at Person (not allowed by ontology)
 		triple := Triple{
@@ -79,15 +79,55 @@ func testTriple(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			PredicateID:     "non-existent-predicate", // non-existent predicate first
 			ObjectEntityID:  person.ID,
 		}
-		_, err = session.InsertTriple(ctx, triple)
+		_, err = session.MatchTriple(ctx, triple)
 		assert.Error(t, err)
 
 		// Now with valid runtime rows but invalid semantic
-		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
+		worksAt, err := session.MatchPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
 		triple.PredicateID = worksAt.ID
-		_, err = session.InsertTriple(ctx, triple)
+		_, err = session.MatchTriple(ctx, triple)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not allowed by ontology")
+	})
+
+	t.Run("MatchTriple Identity-Aware", func(t *testing.T) {
+		person, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Match Subject"})
+		require.NoError(t, err)
+		company, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Match Company"})
+		require.NoError(t, err)
+		worksAt, err := session.MatchPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
+		require.NoError(t, err)
+
+		t1 := Triple{
+			SubjectEntityID: person.ID,
+			PredicateID:     worksAt.ID,
+			ObjectEntityID:  company.ID,
+		}
+
+		// 1. Initial insert
+		res1, err := session.MatchTriple(ctx, t1)
+		require.NoError(t, err)
+		assert.NotEmpty(t, res1.ID)
+
+		// 2. Match existing
+		res2, err := session.MatchTriple(ctx, t1)
+		require.NoError(t, err)
+		assert.Equal(t, res1.ID, res2.ID, "Should reuse existing triple")
+
+		// 3. Match through alias
+		aliasSubject, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Subject Alias"})
+		require.NoError(t, err)
+		_, err = session.LinkEntityAlias(ctx, aliasSubject.ID, person.ID, nil)
+		require.NoError(t, err)
+
+		tAlias := Triple{
+			SubjectEntityID: aliasSubject.ID,
+			PredicateID:     worksAt.ID,
+			ObjectEntityID:  company.ID,
+		}
+		res3, err := session.MatchTriple(ctx, tAlias)
+		require.NoError(t, err)
+		assert.Equal(t, res1.ID, res3.ID, "Should resolve alias and match existing triple")
 	})
 }

@@ -13,8 +13,68 @@ import (
 	"github.com/google/uuid"
 )
 
-// InsertPredicate inserts a new predicate into the runtime.
-func (s *Session) InsertPredicate(ctx context.Context, predicate Predicate) (Predicate, error) {
+// MatchPredicate canonicalizes the candidate predicate, attempts to match an existing canonical predicate in the
+// current session ontology version, and inserts a new canonical predicate if no match is found.
+//
+// This method provides identity-aware predicate materialization. It first normalizes the input predicate's
+// temporal window and metadata, and checks the session's ontology version for any existing predicate with the same
+// identity hash. If a match is found, the existing canonical predicate is returned.
+// Otherwise, a new predicate is created and inserted into the runtime after validating its type
+// against the ontology.
+//
+// MatchPredicate is the primary public entrypoint for ensuring a predicate exists within a session's
+// context without creating duplicate entries for the same real-world identity.
+func (s *Session) MatchPredicate(ctx context.Context, predicate Predicate) (Predicate, error) {
+	if predicate.Type == "" {
+		return Predicate{}, errors.New("predicate type cannot be empty")
+	}
+
+	if !predicate.ValidFrom.IsZero() && !predicate.ValidTo.IsZero() {
+		if predicate.ValidTo.Before(predicate.ValidFrom) {
+			return Predicate{}, errors.New("predicate ValidTo cannot be before ValidFrom")
+		}
+	}
+
+	// Standardize time to UTC for hashing and storage
+	if !predicate.ValidFrom.IsZero() {
+		predicate.ValidFrom = predicate.ValidFrom.UTC()
+	}
+	if !predicate.ValidTo.IsZero() {
+		predicate.ValidTo = predicate.ValidTo.UTC()
+	}
+	predicate.OntologyVersionID = s.version.ID
+
+	// 1. Try to find existing predicate with same ontology_version_id and dedup_hash
+	dedupHash := computePredicateDedupHash(predicate)
+
+	var p Predicate
+	query := `
+		SELECT id, ontology_version_id, type, metadata, valid_from, valid_to, created_at, updated_at 
+		FROM predicates 
+		WHERE ontology_version_id = $1 AND dedup_hash = $2
+		LIMIT 1`
+
+	err := s.db.sqlDB.QueryRowContext(ctx, query, s.version.ID, dedupHash).
+		Scan(&p.ID, &p.OntologyVersionID, &p.Type, &p.Metadata, &p.ValidFrom, &p.ValidTo, &p.CreatedAt, &p.UpdatedAt)
+
+	if err == nil {
+		p.ValidFrom = p.ValidFrom.UTC()
+		p.ValidTo = p.ValidTo.UTC()
+		return p, nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Predicate{}, fmt.Errorf("searching for existing predicate: %w", err)
+	}
+
+	// 2. Not found, insert new one
+	return s.insertPredicate(ctx, predicate)
+}
+
+// insertPredicate is an internal helper that performs the actual row insertion.
+// It is used after matching fails in MatchPredicate or by other internal code paths
+// that truly require forced insertion.
+func (s *Session) insertPredicate(ctx context.Context, predicate Predicate) (Predicate, error) {
 	if predicate.Type == "" {
 		return Predicate{}, errors.New("predicate type cannot be empty")
 	}
@@ -52,22 +112,6 @@ func (s *Session) InsertPredicate(ctx context.Context, predicate Predicate) (Pre
 	}
 
 	dedupHash := computePredicateDedupHash(predicate)
-
-	// Check if already exists by hash to satisfy "InsertPredicate" callers that might be duplicating
-	var existing Predicate
-	query := `
-		SELECT id, ontology_version_id, type, metadata, valid_from, valid_to, created_at, updated_at 
-		FROM predicates 
-		WHERE ontology_version_id = $1 AND dedup_hash = $2
-		LIMIT 1`
-	err = s.db.sqlDB.QueryRowContext(ctx, query, s.version.ID, dedupHash).
-		Scan(&existing.ID, &existing.OntologyVersionID, &existing.Type, &existing.Metadata, &existing.ValidFrom, &existing.ValidTo, &existing.CreatedAt, &existing.UpdatedAt)
-	if err == nil {
-		return existing, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return Predicate{}, fmt.Errorf("checking for existing predicate: %w", err)
-	}
 
 	now := time.Now().UTC()
 	err = s.db.sqlDB.QueryRowContext(ctx,
@@ -114,63 +158,4 @@ func (s *Session) GetPredicateByID(ctx context.Context, id string) (Predicate, e
 		return Predicate{}, fmt.Errorf("fetching predicate: %w", err)
 	}
 	return p, nil
-}
-
-// ResolveOrInsertPredicate resolves an existing predicate or inserts a new one.
-func (s *Session) ResolveOrInsertPredicate(ctx context.Context, predicate Predicate) (Predicate, error) {
-	if predicate.Type == "" {
-		return Predicate{}, errors.New("predicate type cannot be empty")
-	}
-
-	if !predicate.ValidFrom.IsZero() && !predicate.ValidTo.IsZero() {
-		if predicate.ValidTo.Before(predicate.ValidFrom) {
-			return Predicate{}, errors.New("predicate ValidTo cannot be before ValidFrom")
-		}
-	}
-
-	// Validate against ontology
-	var exists bool
-	err := s.db.sqlDB.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM ontology_predicates WHERE ontology_version_id = $1 AND type = $2)",
-		s.version.ID, predicate.Type).Scan(&exists)
-	if err != nil {
-		return Predicate{}, fmt.Errorf("validating predicate against ontology: %w", err)
-	}
-	if !exists {
-		return Predicate{}, fmt.Errorf("predicate type %q not allowed by ontology version %s", predicate.Type, s.version.Slug)
-	}
-
-	// Standardize time to UTC for hashing and storage
-	if !predicate.ValidFrom.IsZero() {
-		predicate.ValidFrom = predicate.ValidFrom.UTC()
-	}
-	if !predicate.ValidTo.IsZero() {
-		predicate.ValidTo = predicate.ValidTo.UTC()
-	}
-	predicate.OntologyVersionID = s.version.ID
-
-	// Try to find existing predicate with same ontology_version_id and dedup_hash
-	var p Predicate
-	dedupHash := computePredicateDedupHash(predicate)
-	query := `
-		SELECT id, ontology_version_id, type, metadata, valid_from, valid_to, created_at, updated_at 
-		FROM predicates 
-		WHERE ontology_version_id = $1 AND dedup_hash = $2
-		LIMIT 1`
-
-	err = s.db.sqlDB.QueryRowContext(ctx, query, s.version.ID, dedupHash).
-		Scan(&p.ID, &p.OntologyVersionID, &p.Type, &p.Metadata, &p.ValidFrom, &p.ValidTo, &p.CreatedAt, &p.UpdatedAt)
-
-	if err == nil {
-		p.ValidFrom = p.ValidFrom.UTC()
-		p.ValidTo = p.ValidTo.UTC()
-		return p, nil
-	}
-
-	if !errors.Is(err, sql.ErrNoRows) {
-		return Predicate{}, fmt.Errorf("searching for existing predicate: %w", err)
-	}
-
-	// Not found, insert new one
-	return s.InsertPredicate(ctx, predicate)
 }

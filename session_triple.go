@@ -11,8 +11,66 @@ import (
 	"github.com/lib/pq"
 )
 
-// InsertTriple inserts a new triple into the runtime.
-func (s *Session) InsertTriple(ctx context.Context, triple Triple) (Triple, error) {
+// MatchTriple canonicalizes the subject and object entities, attempts to match an existing triple in the
+// current session ontology version, and inserts a new triple if no match is found.
+//
+// This method provides identity-aware triple materialization. It first resolves any subject or object
+// aliases to their canonical root entities and checks if a triple with the same subject, predicate,
+// and object already exists in the current session's ontology version. If a match is found, the
+// existing triple is returned. Otherwise, a new triple is created and inserted into the runtime
+// after validating the relationship against the ontology.
+//
+// MatchTriple is the primary public entrypoint for ensuring a triple exists within a session's
+// context without creating duplicate entries for the same semantic relationship.
+func (s *Session) MatchTriple(ctx context.Context, triple Triple) (Triple, error) {
+	if triple.SubjectEntityID == "" {
+		return Triple{}, errors.New("subject entity ID cannot be zero")
+	}
+	if triple.PredicateID == "" {
+		return Triple{}, errors.New("predicate ID cannot be zero")
+	}
+	if triple.ObjectEntityID == "" {
+		return Triple{}, errors.New("object entity ID cannot be zero")
+	}
+
+	// Canonicalize subject and object before matching
+	var err error
+	triple.SubjectEntityID, err = s.GetAntiAliasedEntityID(ctx, triple.SubjectEntityID)
+	if err != nil {
+		return Triple{}, fmt.Errorf("canonicalizing subject: %w", err)
+	}
+	triple.ObjectEntityID, err = s.GetAntiAliasedEntityID(ctx, triple.ObjectEntityID)
+	if err != nil {
+		return Triple{}, fmt.Errorf("canonicalizing object: %w", err)
+	}
+
+	// 1. Try to find existing triple
+	var t Triple
+	query := `
+		SELECT id, ontology_version_id, subject_entity_id, predicate_id, object_entity_id, created_at, updated_at 
+		FROM triples 
+		WHERE ontology_version_id = $1 AND subject_entity_id = $2 AND predicate_id = $3 AND object_entity_id = $4
+		LIMIT 1`
+
+	err = s.db.sqlDB.QueryRowContext(ctx, query, s.version.ID, triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID).
+		Scan(&t.ID, &t.OntologyVersionID, &t.SubjectEntityID, &t.PredicateID, &t.ObjectEntityID, &t.CreatedAt, &t.UpdatedAt)
+
+	if err == nil {
+		return t, nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Triple{}, fmt.Errorf("searching for existing triple: %w", err)
+	}
+
+	// 2. Not found, insert new one
+	return s.insertTriple(ctx, triple)
+}
+
+// insertTriple is an internal helper that performs the actual row insertion.
+// It is used after matching fails in MatchTriple or by other internal code paths
+// that truly require forced insertion.
+func (s *Session) insertTriple(ctx context.Context, triple Triple) (Triple, error) {
 	if triple.SubjectEntityID == "" {
 		return Triple{}, errors.New("subject entity ID cannot be zero")
 	}

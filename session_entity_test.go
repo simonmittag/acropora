@@ -19,7 +19,7 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			},
 			RawName: "  John   Doe  ",
 		}
-		inserted, err := session.InsertEntity(ctx, e)
+		inserted, err := session.MatchEntity(ctx, e)
 		require.NoError(t, err)
 		assert.NotEmpty(t, inserted.ID)
 		assert.Equal(t, version.ID, inserted.OntologyVersionID)
@@ -42,7 +42,7 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			},
 			RawName: "Some Name",
 		}
-		_, err := session.InsertEntity(ctx, e)
+		_, err := session.MatchEntity(ctx, e)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not allowed by ontology")
 	})
@@ -66,38 +66,40 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 					EntityDefinition: EntityDefinition{Type: "Person"},
 					RawName:          tc.input,
 				}
-				inserted, err := session.InsertEntity(ctx, e)
+				inserted, err := session.MatchEntity(ctx, e)
 				require.NoError(t, err)
 				assert.Equal(t, tc.expected, inserted.CanonicalName)
 			})
 		}
 	})
 
-	t.Run("Uniqueness", func(t *testing.T) {
+	t.Run("Identity-Aware Match", func(t *testing.T) {
 		e1 := Entity{
 			EntityDefinition: EntityDefinition{Type: "Person"},
 			RawName:          "Unique Name",
 		}
-		_, err := session.InsertEntity(ctx, e1)
+		inserted1, err := session.MatchEntity(ctx, e1)
 		require.NoError(t, err)
 
 		e2 := Entity{
 			EntityDefinition: EntityDefinition{Type: "Person"},
 			RawName:          "unique name", // Different raw, same canonical
 		}
-		_, err = session.InsertEntity(ctx, e2)
-		assert.Error(t, err, "Should fail due to unique constraint on canonical name")
+		inserted2, err := session.MatchEntity(ctx, e2)
+		require.NoError(t, err, "Should match existing entity instead of failing")
+		assert.Equal(t, inserted1.ID, inserted2.ID, "Should return the same entity ID")
 
 		// Same canonical name in different ontology version should pass
 		def2 := Definition{
 			Entities: []EntityDefinition{{Type: "Person"}},
 		}
-		version2, err := db.SeedOntology(ctx, sqlDB, def2, SeedOptions{Slug: "v2"})
+		version2, err := db.SeedOntology(ctx, sqlDB, def2, SeedOptions{Slug: "v2-uniqueness"})
 		require.NoError(t, err)
 		session2 := db.NewSession(version2)
 
-		_, err = session2.InsertEntity(ctx, e1)
+		inserted3, err := session2.MatchEntity(ctx, e1)
 		assert.NoError(t, err, "Should allow same canonical name in different ontology version")
+		assert.NotEqual(t, inserted1.ID, inserted3.ID, "Should be a different entity ID in different version")
 	})
 
 	t.Run("Lookup by raw name", func(t *testing.T) {
@@ -106,7 +108,7 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			EntityDefinition: EntityDefinition{Type: "Person"},
 			RawName:          raw,
 		}
-		inserted, err := session.InsertEntity(ctx, e)
+		inserted, err := session.MatchEntity(ctx, e)
 		require.NoError(t, err)
 
 		// Exact match
@@ -125,13 +127,13 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 	})
 
 	t.Run("Alias-aware lookup", func(t *testing.T) {
-		canonical, err := session.InsertEntity(ctx, Entity{
+		canonical, err := session.MatchEntity(ctx, Entity{
 			EntityDefinition: EntityDefinition{Type: "Company"},
 			RawName:          "Canonical Corp",
 		})
 		require.NoError(t, err)
 
-		alias, err := session.InsertEntity(ctx, Entity{
+		alias, err := session.MatchEntity(ctx, Entity{
 			EntityDefinition: EntityDefinition{Type: "Company"},
 			RawName:          "Alias Inc",
 		})
@@ -149,13 +151,13 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 
 	t.Run("Entity Aliasing", func(t *testing.T) {
 		// Setup
-		a, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "A"})
+		a, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "A"})
 		require.NoError(t, err)
-		b, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B"})
+		b, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B"})
 		require.NoError(t, err)
-		c, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "C"})
+		c, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "C"})
 		require.NoError(t, err)
-		worksAt, err := session.InsertPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
+		worksAt, err := session.MatchPredicate(ctx, Predicate{PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
 
 		// Test A: Simple alias link
@@ -177,7 +179,7 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 
 		// Test B: Triple query unification
 		// A has C
-		_, err = session.InsertTriple(ctx, Triple{SubjectEntityID: a.ID, PredicateID: worksAt.ID, ObjectEntityID: c.ID})
+		_, err = session.MatchTriple(ctx, Triple{SubjectEntityID: a.ID, PredicateID: worksAt.ID, ObjectEntityID: c.ID})
 		require.NoError(t, err)
 		// B already linked to A. Triples on B stay on B.
 		// Let's insert one on B directly into DB to simulate historical triple if needed,
@@ -185,11 +187,11 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 		// To test this we need a triple that WAS on B before it was linked, OR just insert it bypass canonicalization if we want to be sure.
 		// Actually, let's just use the Session to insert it BEFORE linking.
 
-		d, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "D"})
+		d, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "D"})
 		require.NoError(t, err)
-		b2, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B2"})
+		b2, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B2"})
 		require.NoError(t, err)
-		_, err = session.InsertTriple(ctx, Triple{SubjectEntityID: b2.ID, PredicateID: worksAt.ID, ObjectEntityID: d.ID})
+		_, err = session.MatchTriple(ctx, Triple{SubjectEntityID: b2.ID, PredicateID: worksAt.ID, ObjectEntityID: d.ID})
 		require.NoError(t, err)
 
 		// Link b2 -> a
@@ -211,19 +213,19 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 		assert.Equal(t, outgoingA, outgoingB2)
 
 		// Test C: New writes via alias canonicalize
-		e, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "E"})
+		e, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "E"})
 		require.NoError(t, err)
-		tr, err := session.InsertTriple(ctx, Triple{SubjectEntityID: b.ID, PredicateID: worksAt.ID, ObjectEntityID: e.ID})
+		tr, err := session.MatchTriple(ctx, Triple{SubjectEntityID: b.ID, PredicateID: worksAt.ID, ObjectEntityID: e.ID})
 		require.NoError(t, err)
 		assert.Equal(t, a.ID, tr.SubjectEntityID)
 
 		// Test D: Child alias reparenting
 		// D -> B, then B -> A
-		entD, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "D_ent"})
+		entD, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "D_ent"})
 		require.NoError(t, err)
-		entB, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B_ent"})
+		entB, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "B_ent"})
 		require.NoError(t, err)
-		entA, err := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "A_ent"})
+		entA, err := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "A_ent"})
 		require.NoError(t, err)
 
 		_, err = session.LinkEntityAlias(ctx, entD.ID, entB.ID, nil)
@@ -269,7 +271,7 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 		version2, err := db.SeedOntology(ctx, sqlDB, def2, SeedOptions{Slug: "v2-aliasing"})
 		require.NoError(t, err)
 		session2 := db.NewSession(version2)
-		entV2, err := session2.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "V2_Person"})
+		entV2, err := session2.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "V2_Person"})
 		require.NoError(t, err)
 
 		_, err = session.LinkEntityAlias(ctx, entV2.ID, a.ID, nil)
@@ -300,12 +302,12 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 		assert.Equal(t, []interface{}{"a"}, result["tags"]) // Arrays are not merged, canonical wins
 	})
 
-	t.Run("ResolveOrInsertEntity", func(t *testing.T) {
+	t.Run("MatchEntity", func(t *testing.T) {
 		// Re-seed since previous tests might have truncated or we want a fresh start
 		def := Definition{
-			Entities: []EntityDefinition{{Type: "Company"}, {Type: "Person"}},
+			Entities: []EntityDefinition{{Type: "Company"}, {Type: "Person"}, {Type: "Other"}},
 		}
-		version, err := db.SeedOntology(ctx, sqlDB, def, SeedOptions{Slug: "v-resolve"})
+		version, err := db.SeedOntology(ctx, sqlDB, def, SeedOptions{Slug: "v-match-entity-unique"})
 		require.NoError(t, err)
 		session := db.NewSession(version)
 
@@ -314,7 +316,7 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			EntityDefinition: EntityDefinition{Type: "Company"},
 			RawName:          "Apple Inc.",
 		}
-		resolved, err := session.ResolveOrInsertEntity(ctx, e)
+		resolved, err := session.MatchEntity(ctx, e)
 		require.NoError(t, err)
 		assert.NotEmpty(t, resolved.ID)
 		assert.Equal(t, "Apple Inc.", resolved.RawName)
@@ -325,7 +327,7 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			EntityDefinition: EntityDefinition{Type: "Company"},
 			RawName:          "  APPLE  INC.  ",
 		}
-		resolved2, err := session.ResolveOrInsertEntity(ctx, e2)
+		resolved2, err := session.MatchEntity(ctx, e2)
 		require.NoError(t, err)
 		assert.Equal(t, resolved.ID, resolved2.ID)
 		assert.Equal(t, "Apple Inc.", resolved2.RawName)
@@ -335,35 +337,58 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			EntityDefinition: EntityDefinition{Type: "Company"},
 			RawName:          "Apple",
 		}
-		inserted3, err := session.InsertEntity(ctx, e3)
+		// MatchEntity will first try to find "Apple", not find it, then insert it.
+		inserted3, err := session.MatchEntity(ctx, e3)
 		require.NoError(t, err)
 
 		// Link "Apple" as an alias of "Apple Inc."
 		_, err = session.LinkEntityAlias(ctx, inserted3.ID, resolved.ID, nil)
 		require.NoError(t, err)
 
-		// Now ResolveOrInsert "Apple" should return "Apple Inc."
+		// Now MatchEntity "Apple" should return "Apple Inc."
 		eResolve := Entity{
 			EntityDefinition: EntityDefinition{Type: "Company"},
 			RawName:          "Apple",
 		}
-		resolvedAlias, err := session.ResolveOrInsertEntity(ctx, eResolve)
+		resolvedAlias, err := session.MatchEntity(ctx, eResolve)
 		require.NoError(t, err)
 		assert.Equal(t, resolved.ID, resolvedAlias.ID)
 		assert.Equal(t, "Apple Inc.", resolvedAlias.RawName)
 
-		// Test D: Different type with same name (if allowed by ontology, but here it's still same canonical name)
-		// Our current implementation of GetEntityByRawName doesn't care about type, it just finds the entity by name.
-		// If we wanted to support same name for different types, we'd need to change the schema/logic.
-		// For now, it will resolve to the existing one regardless of type in the input.
+		// Test D: Different type with same name
 		ePerson := Entity{
 			EntityDefinition: EntityDefinition{Type: "Person"},
 			RawName:          "Apple Inc.",
 		}
-		resolvedPerson, err := session.ResolveOrInsertEntity(ctx, ePerson)
+		resolvedPerson, err := session.MatchEntity(ctx, ePerson)
 		require.NoError(t, err)
 		assert.Equal(t, resolved.ID, resolvedPerson.ID)
 		assert.Equal(t, "Company", resolvedPerson.Type) // Still "Company" as it's the existing entity
+
+		// Test E: Version scoping
+		defV2 := Definition{
+			Entities: []EntityDefinition{{Type: "Person"}, {Type: "Company"}}, // Changed to avoid hash collision if previous was same
+		}
+		version2, err := db.SeedOntology(ctx, sqlDB, defV2, SeedOptions{Slug: "v2-match-scoping"})
+		require.NoError(t, err)
+		session2 := db.NewSession(version2)
+
+		eMatch := Entity{
+			EntityDefinition: EntityDefinition{Type: "Person"},
+			RawName:          "Apple Inc.",
+		}
+		resolvedV2, err := session2.MatchEntity(ctx, eMatch)
+		require.NoError(t, err)
+		assert.NotEqual(t, resolved.ID, resolvedV2.ID, "Should not match entity from another version")
+
+		// Test F: Ontology validation failure
+		eInvalid := Entity{
+			EntityDefinition: EntityDefinition{Type: "InvalidType"},
+			RawName:          "Valid Name",
+		}
+		_, err = session.MatchEntity(ctx, eInvalid)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not allowed by ontology")
 	})
 
 	t.Run("GetEntityNeighbours", func(t *testing.T) {
@@ -387,31 +412,31 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 		session := db.NewSession(version)
 
 		// 2. Setup Entities
-		alice, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice"})
-		bob, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob"})
-		apple, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Apple"})
-		google, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Google"})
+		alice, _ := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice"})
+		bob, _ := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob"})
+		apple, _ := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Apple"})
+		google, _ := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Google"})
 
 		// 3. Setup Aliases
 		// AliceAlias -> Alice
-		aliceAlias, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice Alias"})
+		aliceAlias, _ := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Alice Alias"})
 		_, err = session.LinkEntityAlias(ctx, aliceAlias.ID, alice.ID, nil)
 		require.NoError(t, err)
 
 		// 4. Setup Triples
-		pWorksAt, err := session.InsertPredicate(ctx, Predicate{Persistable: Persistable{OntologyVersionID: version.ID}, PredicateDefinition: PredicateDefinition{Type: "works_at"}})
+		pWorksAt, err := session.MatchPredicate(ctx, Predicate{Persistable: Persistable{OntologyVersionID: version.ID}, PredicateDefinition: PredicateDefinition{Type: "works_at"}})
 		require.NoError(t, err)
-		pKnows, err := session.InsertPredicate(ctx, Predicate{Persistable: Persistable{OntologyVersionID: version.ID}, PredicateDefinition: PredicateDefinition{Type: "knows"}})
+		pKnows, err := session.MatchPredicate(ctx, Predicate{Persistable: Persistable{OntologyVersionID: version.ID}, PredicateDefinition: PredicateDefinition{Type: "knows"}})
 		require.NoError(t, err)
 
 		// Alice works_at Apple
-		t1, err := session.InsertTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: alice.ID, PredicateID: pWorksAt.ID, ObjectEntityID: apple.ID})
+		t1, err := session.MatchTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: alice.ID, PredicateID: pWorksAt.ID, ObjectEntityID: apple.ID})
 		require.NoError(t, err)
 		// Alice Alias works_at Google
-		t2, err := session.InsertTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: aliceAlias.ID, PredicateID: pWorksAt.ID, ObjectEntityID: google.ID})
+		t2, err := session.MatchTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: aliceAlias.ID, PredicateID: pWorksAt.ID, ObjectEntityID: google.ID})
 		require.NoError(t, err)
 		// Bob knows Alice
-		t3, err := session.InsertTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: bob.ID, PredicateID: pKnows.ID, ObjectEntityID: alice.ID})
+		t3, err := session.MatchTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: bob.ID, PredicateID: pKnows.ID, ObjectEntityID: alice.ID})
 		require.NoError(t, err)
 
 		t.Run("Basic Outgoing and Incoming with Alias Expansion", func(t *testing.T) {
@@ -458,12 +483,12 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 
 		t.Run("Neighbour Canonical Normalization", func(t *testing.T) {
 			// BobAlias -> Bob
-			bobAlias, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob Alias"})
+			bobAlias, _ := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Bob Alias"})
 			_, err = session.LinkEntityAlias(ctx, bobAlias.ID, bob.ID, nil)
 			require.NoError(t, err)
 
 			// New triple: Alice knows BobAlias
-			t4, _ := session.InsertTriple(ctx, Triple{SubjectEntityID: alice.ID, PredicateID: pKnows.ID, ObjectEntityID: bobAlias.ID})
+			t4, _ := session.MatchTriple(ctx, Triple{SubjectEntityID: alice.ID, PredicateID: pKnows.ID, ObjectEntityID: bobAlias.ID})
 
 			neighbours, err := session.GetEntityNeighbours(ctx, alice.ID)
 			require.NoError(t, err)
@@ -490,17 +515,17 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 			// But the requirement says "different triples are different facts".
 
 			// Let's add another 'works_at' predicate with different metadata/validity to allow another triple
-			pWorksAt2, err := session.InsertPredicate(ctx, Predicate{
+			pWorksAt2, err := session.MatchPredicate(ctx, Predicate{
 				Persistable:         Persistable{OntologyVersionID: version.ID},
 				PredicateDefinition: PredicateDefinition{Type: "works_at", Metadata: json.RawMessage(`{"redundant": true}`)},
 			})
 			require.NoError(t, err)
-			// Note: triple.SubjectEntityID and triple.ObjectEntityID are canonicalized in InsertTriple.
+			// Note: triple.SubjectEntityID and triple.ObjectEntityID are canonicalized in MatchTriple.
 			// To ensure a distinct triple, we MUST have a different object entity here.
 			// Google is already used in t2 (Alice Alias -> Google).
 			// Let's create a new company for this test.
-			microsoft, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Microsoft"})
-			_, err = session.InsertTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: aliceAlias.ID, PredicateID: pWorksAt2.ID, ObjectEntityID: microsoft.ID})
+			microsoft, _ := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Company"}, RawName: "Microsoft"})
+			_, err = session.MatchTriple(ctx, Triple{Persistable: Persistable{OntologyVersionID: version.ID}, SubjectEntityID: aliceAlias.ID, PredicateID: pWorksAt2.ID, ObjectEntityID: microsoft.ID})
 			require.NoError(t, err)
 
 			neighbours, err := session.GetEntityNeighbours(ctx, alice.ID)
@@ -535,7 +560,7 @@ func testEntity(t *testing.T, ctx context.Context, session *Session, db *DB, sql
 		})
 
 		t.Run("No Neighbours", func(t *testing.T) {
-			lonely, _ := session.InsertEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Lonely"})
+			lonely, _ := session.MatchEntity(ctx, Entity{EntityDefinition: EntityDefinition{Type: "Person"}, RawName: "Lonely"})
 			neighbours, err := session.GetEntityNeighbours(ctx, lonely.ID)
 			require.NoError(t, err)
 			assert.Empty(t, neighbours)

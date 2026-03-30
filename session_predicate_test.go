@@ -22,7 +22,7 @@ func testPredicate(t *testing.T, ctx context.Context, session *Session, db *DB, 
 			ValidFrom: now,
 			Metadata:  json.RawMessage(`{"runtime_meta": "bar"}`),
 		}
-		inserted, err := session.InsertPredicate(ctx, p)
+		inserted, err := session.MatchPredicate(ctx, p)
 		require.NoError(t, err)
 		assert.NotEmpty(t, inserted.ID)
 		assert.Equal(t, version.ID, inserted.OntologyVersionID)
@@ -42,12 +42,12 @@ func testPredicate(t *testing.T, ctx context.Context, session *Session, db *DB, 
 				Type: "invalid_predicate",
 			},
 		}
-		_, err := session.InsertPredicate(ctx, p)
+		_, err := session.MatchPredicate(ctx, p)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not allowed by ontology")
 	})
 
-	t.Run("ResolveOrInsertPredicate", func(t *testing.T) {
+	t.Run("MatchPredicate", func(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Minute)
 		p1 := Predicate{
 			PredicateDefinition: PredicateDefinition{
@@ -58,25 +58,25 @@ func testPredicate(t *testing.T, ctx context.Context, session *Session, db *DB, 
 		}
 
 		// 1. Valid insert
-		res1, err := session.ResolveOrInsertPredicate(ctx, p1)
+		res1, err := session.MatchPredicate(ctx, p1)
 		require.NoError(t, err)
 		assert.NotEmpty(t, res1.ID)
 
 		// 2. Reuse existing
-		res2, err := session.ResolveOrInsertPredicate(ctx, p1)
+		res2, err := session.MatchPredicate(ctx, p1)
 		require.NoError(t, err)
 		assert.Equal(t, res1.ID, res2.ID, "Should reuse existing predicate")
 
 		// 3. Different validity window
 		p2 := p1
 		p2.ValidTo = now.Add(time.Hour)
-		res3, err := session.ResolveOrInsertPredicate(ctx, p2)
+		res3, err := session.MatchPredicate(ctx, p2)
 		require.NoError(t, err)
 		assert.NotEqual(t, res1.ID, res3.ID, "Should create new predicate for different validity window")
 
 		// 4. Ontology validation failure
 		p3 := Predicate{PredicateDefinition: PredicateDefinition{Type: "non_existent"}}
-		_, err = session.ResolveOrInsertPredicate(ctx, p3)
+		_, err = session.MatchPredicate(ctx, p3)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not allowed by ontology")
 
@@ -86,7 +86,7 @@ func testPredicate(t *testing.T, ctx context.Context, session *Session, db *DB, 
 			ValidFrom:           now.Add(time.Hour),
 			ValidTo:             now,
 		}
-		_, err = session.ResolveOrInsertPredicate(ctx, p4)
+		_, err = session.MatchPredicate(ctx, p4)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "ValidTo cannot be before ValidFrom")
 
@@ -96,14 +96,14 @@ func testPredicate(t *testing.T, ctx context.Context, session *Session, db *DB, 
 			ValidFrom:           now.Add(2 * time.Hour),
 			Metadata:            json.RawMessage(`{"special": "data"}`),
 		}
-		res5, err := session.ResolveOrInsertPredicate(ctx, p5)
+		res5, err := session.MatchPredicate(ctx, p5)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"special": "data"}`, string(res5.Metadata))
 
 		// 7. Different metadata should NOT reuse
 		p6 := p5
 		p6.Metadata = json.RawMessage(`{"special": "other"}`)
-		res6, err := session.ResolveOrInsertPredicate(ctx, p6)
+		res6, err := session.MatchPredicate(ctx, p6)
 		require.NoError(t, err)
 		assert.NotEqual(t, res5.ID, res6.ID, "Should create new predicate for different metadata")
 	})
