@@ -1,12 +1,20 @@
-.PHONY: build test docker clean
+.PHONY: build test docker clean release release-dry
+
+VERSION ?= $(shell git describe --tags --always --dirty)
 
 # Build all packages
 build:
-	go build ./...
+	go build -ldflags="-X 'github.com/simonmittag/acropora.Version=$(VERSION)'" ./...
+
+# Release with goreleaser
+release: build test
+	git tag $(VERSION)
+	git push origin $(VERSION)
+	GORELEASER_CURRENT_TAG=$(VERSION) goreleaser release --clean
 
 # Release with goreleaser (dry run)
 release-dry:
-	goreleaser release --snapshot --clean
+	GORELEASER_CURRENT_TAG=$(VERSION) goreleaser release --snapshot --clean
 
 # Run all tests
 test:

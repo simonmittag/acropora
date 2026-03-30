@@ -23,6 +23,6 @@ release:
   github:
     owner: simonmittag
     name: acropora
-  draft: true
-  prerelease: auto
+  draft: false
+  prerelease: true
   mode: replace

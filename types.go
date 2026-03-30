@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// Version is the current version of the acropora library.
+// It is injected at build time via ldflags.
+var Version = "dev"
+
 // --- Base Types ---
 
 // Persistable contains common fields for all database-backed entities.

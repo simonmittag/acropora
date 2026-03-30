@@ -4,7 +4,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/simonmittag/acropora.svg)](https://pkg.go.dev/github.com/simonmittag/acropora)
 [![Go Report Card](https://goreportcard.com/badge/github.com/simonmittag/acropora)](https://goreportcard.com/report/github.com/simonmittag/acropora)
-[![Version](https://img.shields.io/badge/version-0.1.0-orange.svg)](https://github.com/simonmittag/acropora/releases)
+![Version](https://img.shields.io/github/v/release/simonmittag/acropora)
 
 **Acropora** is an alpha-stage Go library for storing directional subject–predicate–object triples on PostgreSQL. It provides a small, explicit persistence layer for semantically constrained graph-like data without the overhead of a dedicated graph database.
 
