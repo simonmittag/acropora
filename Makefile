@@ -10,7 +10,6 @@ build:
 release: build test
 	git tag $(VERSION)
 	git push origin $(VERSION)
-	GORELEASER_CURRENT_TAG=$(VERSION) goreleaser release --clean
 
 # Release with goreleaser (dry run)
 release-dry:
