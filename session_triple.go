@@ -56,6 +56,7 @@ func (s *Session) MatchTriple(ctx context.Context, triple Triple) (Triple, error
 		Scan(&t.ID, &t.OntologyVersionID, &t.SubjectEntityID, &t.PredicateID, &t.ObjectEntityID, &t.CreatedAt, &t.UpdatedAt)
 
 	if err == nil {
+		debug(ctx, "matched triple %s-%s-%s (found)", triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID)
 		return t, nil
 	}
 
@@ -64,6 +65,7 @@ func (s *Session) MatchTriple(ctx context.Context, triple Triple) (Triple, error
 	}
 
 	// 2. Not found, insert new one
+	debug(ctx, "matched triple %s-%s-%s (inserted)", triple.SubjectEntityID, triple.PredicateID, triple.ObjectEntityID)
 	return s.insertTriple(ctx, triple)
 }
 

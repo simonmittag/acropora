@@ -19,7 +19,9 @@ type DB struct {
 
 // New creates a new Acropora DB wrapper, verifies the connection, and runs migrations.
 func New(ctx context.Context, db *sql.DB) (*DB, error) {
+	info(ctx, "initializing database")
 	if err := db.PingContext(ctx); err != nil {
+		errorf(ctx, "failed to ping database: %v", err)
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
@@ -45,6 +47,7 @@ func (d *DB) RawDB() *sql.DB {
 }
 
 func (d *DB) migrate(ctx context.Context) error {
+	info(ctx, "running migrations")
 	goose.SetBaseFS(migrations)
 	goose.SetTableName("acropora_db_version")
 

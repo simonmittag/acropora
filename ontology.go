@@ -110,6 +110,7 @@ func (d *DB) GetOntologyVersion(ctx context.Context, opts GetOntologyVersionOpti
 
 // SeedOntology validates and writes a new ontology version to the database.
 func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts SeedOptions) (OntologyVersion, error) {
+	debug(ctx, "seeding ontology slug=%s", opts.Slug)
 	// 1. Validation
 	if err := validateOntologyDefinition(def); err != nil {
 		return OntologyVersion{}, fmt.Errorf("validation failed: %w", err)
@@ -141,10 +142,13 @@ func (d *DB) SeedOntology(ctx context.Context, db *sql.DB, def Definition, opts 
 
 		cname := codename.Generate(rng, 0)
 		seed := codename.Generate(rng, 0)
-		hash := sha256.Sum256([]byte(seed))
-		suffix := base64.RawURLEncoding.EncodeToString(hash[:])
+		h := sha256.Sum256([]byte(seed))
+		suffix := base64.RawURLEncoding.EncodeToString(h[:])
 		if len(suffix) > 4 {
 			suffix = suffix[:4]
+		}
+		for len(suffix) < 4 {
+			suffix += "0"
 		}
 		slug = fmt.Sprintf("%s-%s", cname, suffix)
 	}

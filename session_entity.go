@@ -37,6 +37,7 @@ func (s *Session) MatchEntity(ctx context.Context, entity Entity) (Entity, error
 	// 1. Try to find existing entity by name (handles canonical name and aliases)
 	found, err := s.GetEntityByRawName(ctx, entity.RawName)
 	if err == nil {
+		debug(ctx, "matched entity %q (found)", entity.RawName)
 		// Found existing entity. Ensure types match if requested.
 		// If the existing entity has a different type, we could either return an error,
 		// or just return the found entity. The requirements say "takes a name and an optional entity type".
@@ -50,6 +51,7 @@ func (s *Session) MatchEntity(ctx context.Context, entity Entity) (Entity, error
 	}
 
 	// 2. Not found, so insert new entity
+	debug(ctx, "matched entity %q (inserted)", entity.RawName)
 	return s.insertEntity(ctx, entity)
 }
 
@@ -151,6 +153,7 @@ func (s *Session) GetEntityByRawName(ctx context.Context, rawName string) (Entit
 
 // LinkEntityAlias links an alias entity to a canonical root entity.
 func (s *Session) LinkEntityAlias(ctx context.Context, aliasEntityID, canonicalEntityID string, metadata json.RawMessage) (EntityAlias, error) {
+	debug(ctx, "linking entity alias %s -> %s", aliasEntityID, canonicalEntityID)
 	if aliasEntityID == "" || canonicalEntityID == "" {
 		return EntityAlias{}, errors.New("entity IDs cannot be empty")
 	}
@@ -302,6 +305,7 @@ func (s *Session) GetAliasGroupEntityIDs(ctx context.Context, entityID string) (
 
 // GetEntityNeighbours returns all one-hop neighbours of an entity, expanding across the alias group.
 func (s *Session) GetEntityNeighbours(ctx context.Context, entityID string) ([]Neighbour, error) {
+	debug(ctx, "fetching neighbours for entity %s", entityID)
 	// 1. Resolve input entity to canonical root
 	canonicalID, err := s.GetAntiAliasedEntityID(ctx, entityID)
 	if err != nil {

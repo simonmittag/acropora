@@ -58,6 +58,7 @@ func (s *Session) MatchPredicate(ctx context.Context, predicate Predicate) (Pred
 		Scan(&p.ID, &p.OntologyVersionID, &p.Type, &p.Metadata, &p.ValidFrom, &p.ValidTo, &p.CreatedAt, &p.UpdatedAt)
 
 	if err == nil {
+		debug(ctx, "matched predicate %q (found)", predicate.Type)
 		p.ValidFrom = p.ValidFrom.UTC()
 		p.ValidTo = p.ValidTo.UTC()
 		return p, nil
@@ -68,6 +69,7 @@ func (s *Session) MatchPredicate(ctx context.Context, predicate Predicate) (Pred
 	}
 
 	// 2. Not found, insert new one
+	debug(ctx, "matched predicate %q (inserted)", predicate.Type)
 	return s.insertPredicate(ctx, predicate)
 }
 
