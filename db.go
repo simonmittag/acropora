@@ -3,12 +3,16 @@ package acropora
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"fmt"
 
 	"github.com/pressly/goose/v3"
 
 	acropora_db "github.com/simonmittag/acropora/internal/db"
 )
+
+//go:embed migrations/.keep
+var embedMigrations embed.FS
 
 // Options allows configuring the Acropora DB wrapper.
 type Options struct {
@@ -63,13 +67,15 @@ func (d *DB) migrate(ctx context.Context) error {
 
 	goose.SetTableName(acropora_db.TableName(d.tablePrefix, acropora_db.TableDbVersion))
 
+	goose.SetBaseFS(embedMigrations)
+
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
 
-	// Use a dedicated empty directory to satisfy goose's requirement for a path,
-	// while actually running only Go-registered migrations.
-	if err := goose.UpContext(migrationCtx, d.sqlDB, "gomigrations"); err != nil {
+	// Use the migrations folder to satisfy goose's requirement for a path,
+	// while actually running Go-registered migrations.
+	if err := goose.UpContext(migrationCtx, d.sqlDB, "migrations"); err != nil {
 		return err
 	}
 
